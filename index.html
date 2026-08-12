@@ -3,35 +3,262 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>USCCS Admin Console</title>
+  <title>USCCS Admin Console — Misconduct Review</title>
   <style>
-    :root { --navy: #11213F; --gold: #E7C247; --bg: #F4F6FA; --border: #E1E5EC; }
-    body { font-family: -apple-system, sans-serif; background: var(--bg); margin: 0; }
-    header { background: var(--navy); color: var(--gold); padding: 14px 20px; font-weight: 700; display: flex; justify-content: space-between; align-items: center; }
-    header a { color: #fff; font-size: 13px; text-decoration: none; }
-    main { max-width: 700px; margin: 0 auto; padding: 24px; }
-    .card { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
+    :root {
+      --navy: #11213F; --blue: #6BC4E8; --gold: #E7C247;
+      --bg: #F4F6FA; --border: #E1E5EC; --gray: #5A6472; --danger: #C0392B; --success: #1F7A4D;
+    }
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; background: var(--bg); margin: 0; color: #1a1a1a; }
+    header { background: var(--navy); color: var(--gold); padding: 14px 24px; font-weight: 700; font-size: 17px; display: flex; justify-content: space-between; align-items: center; }
+    header .who { color: #fff; font-size: 13px; font-weight: 400; }
+    header .who a { color: var(--blue); margin-left: 12px; text-decoration: none; }
+    main { max-width: 1100px; margin: 0 auto; padding: 24px; }
+    .card { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 18px; }
+    .muted { color: var(--gray); font-size: 13px; }
+    .err { color: var(--danger); font-size: 13px; }
+
+    .filters { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
+    .field label { display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--gray); margin-bottom: 4px; }
+    .field input, .field select { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
+    .checkbox-field { display: flex; align-items: center; gap: 6px; padding-bottom: 8px; }
+
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--gray); padding: 8px 10px; border-bottom: 2px solid var(--border); }
+    td { padding: 10px; border-bottom: 1px solid var(--border); font-size: 14px; vertical-align: top; }
+    tr.incident-row { cursor: pointer; }
+    tr.incident-row:hover { background: #F9FAFC; }
+
+    .badge { display: inline-block; padding: 3px 10px; border-radius: 10px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .02em; }
+    .badge-pending { background: #EEF1F8; color: var(--gray); }
+    .badge-under_review { background: #DCEFFB; color: #1B5E80; }
+    .badge-sanctioned { background: #FBEAE8; color: var(--danger); }
+    .badge-dismissed { background: #E9F6EE; color: var(--success); }
+
+    .detail-panel { padding: 16px; background: var(--bg); border-radius: 8px; margin: 4px 0 14px; }
+    .detail-panel .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 12px; }
+    .detail-panel textarea, .detail-panel select { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; font-family: inherit; }
+    .detail-panel textarea { min-height: 70px; }
+    .detail-panel .section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--gray); margin: 10px 0 4px; }
+
+    button { padding: 8px 16px; border-radius: 6px; border: none; background: var(--navy); color: #fff; font-weight: 600; cursor: pointer; font-size: 13.5px; }
+    button:hover { opacity: .9; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
   </style>
 </head>
 <body>
-  <header>
-    USCCS Admin Console
+
+<header>
+  USCCS Admin Console — Misconduct Review
+  <span class="who" id="whoDisplay">
     <a href="/oauth/logout">Log out</a>
-  </header>
-  <main>
-    <div class="card">
-      <h2>Stage 1 test page</h2>
-      <p>If you're seeing this, the full login chain worked: OAuth redirect → SportsEngine login → orgAdmin check → session created.</p>
-      <div id="whoami">Loading identity...</div>
+  </span>
+</header>
+
+<main>
+  <div class="card">
+    <div class="filters">
+      <div class="checkbox-field">
+        <input type="checkbox" id="includeYellow" onchange="loadMisconduct()" />
+        <label for="includeYellow" style="margin:0; text-transform:none; font-weight:400; color:#1a1a1a; font-size:14px;">Include Yellow Cards</label>
+      </div>
+      <div class="field">
+        <label for="teamFilter">Team</label>
+        <select id="teamFilter" onchange="loadMisconduct()">
+          <option value="">All Teams</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="playerFilter">Player Name</label>
+        <input type="text" id="playerFilter" placeholder="Search..." oninput="debouncedLoad()" />
+      </div>
+      <div class="field">
+        <label for="dateFrom">From</label>
+        <input type="date" id="dateFrom" onchange="loadMisconduct()" />
+      </div>
+      <div class="field">
+        <label for="dateTo">To</label>
+        <input type="date" id="dateTo" onchange="loadMisconduct()" />
+      </div>
     </div>
-  </main>
-  <script>
-    fetch('/api/whoami')
-      .then(r => r.json())
-      .then(data => {
-        document.getElementById('whoami').innerHTML =
-          '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+  </div>
+
+  <div class="card">
+    <div id="resultsMeta" class="muted" style="margin-bottom:10px;"></div>
+    <table>
+      <thead>
+        <tr>
+          <th>Game Date</th>
+          <th>Team</th>
+          <th>Player</th>
+          <th>Type</th>
+          <th>Reason</th>
+          <th>Min</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="resultsBody"></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+  let misconductData = [];
+  let expandedEntryId = null;
+  let debounceTimer = null;
+
+  function debouncedLoad() {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(loadMisconduct, 350);
+  }
+
+  async function init() {
+    try {
+      const whoRes = await fetch('/api/whoami');
+      if (whoRes.status === 401) { window.location.href = '/oauth/login'; return; }
+      const who = await whoRes.json();
+      document.getElementById('whoDisplay').innerHTML =
+        escapeHtml(who.name) + ' <a href="/oauth/logout">Log out</a>';
+
+      await loadTeams();
+      await loadMisconduct();
+    } catch (e) {
+      document.getElementById('resultsMeta').innerHTML = '<span class="err">Failed to load: ' + escapeHtml(e.message) + '</span>';
+    }
+  }
+
+  async function loadTeams() {
+    const res = await fetch('/api/misconduct/teams');
+    const data = await res.json();
+    const select = document.getElementById('teamFilter');
+    (data.teams || []).forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t.team_id;
+      opt.textContent = t.team_name;
+      select.appendChild(opt);
+    });
+  }
+
+  async function loadMisconduct() {
+    const params = new URLSearchParams();
+    if (document.getElementById('includeYellow').checked) params.set('includeYellow', 'true');
+    const teamId = document.getElementById('teamFilter').value;
+    if (teamId) params.set('teamId', teamId);
+    const playerName = document.getElementById('playerFilter').value.trim();
+    if (playerName) params.set('playerName', playerName);
+    const dateFrom = document.getElementById('dateFrom').value;
+    if (dateFrom) params.set('dateFrom', dateFrom);
+    const dateTo = document.getElementById('dateTo').value;
+    if (dateTo) params.set('dateTo', dateTo);
+
+    const res = await fetch('/api/misconduct?' + params.toString());
+    const data = await res.json();
+    misconductData = data.misconduct || [];
+    expandedEntryId = null;
+    renderResults();
+  }
+
+  function renderResults() {
+    const tbody = document.getElementById('resultsBody');
+    document.getElementById('resultsMeta').textContent = misconductData.length + ' incident(s) found';
+
+    if (!misconductData.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="muted">No misconduct matches these filters.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = misconductData.map(row => {
+      const dateStr = row.game_date ? new Date(row.game_date).toLocaleDateString('en-US', { timeZone: 'America/New_York' }) : '—';
+      const rowHtml = `
+        <tr class="incident-row" onclick="toggleDetail(${row.entry_id})">
+          <td>${dateStr}</td>
+          <td>${escapeHtml(row.team_name)}</td>
+          <td>${escapeHtml(row.name)}${row.person_type === 'staff' ? ' <span class="muted">(staff)</span>' : ''}</td>
+          <td>${row.event_type === 'Red Card' ? '🟥' : '🟨'} ${row.event_type}</td>
+          <td>${escapeHtml(row.reason || '—')}</td>
+          <td>${row.minute != null ? row.minute : '—'}</td>
+          <td><span class="badge badge-${row.status}">${row.status.replace('_', ' ')}</span></td>
+        </tr>
+      `;
+      const detailHtml = expandedEntryId === row.entry_id
+        ? `<tr><td colspan="7">${renderDetailPanel(row)}</td></tr>`
+        : '';
+      return rowHtml + detailHtml;
+    }).join('');
+  }
+
+  function toggleDetail(entryId) {
+    expandedEntryId = expandedEntryId === entryId ? null : entryId;
+    renderResults();
+  }
+
+  function renderDetailPanel(row) {
+    return `
+      <div class="detail-panel">
+        ${row.supplemental_report ? `
+          <div class="section-label">Supplemental Report</div>
+          <p style="white-space:pre-wrap; margin:0 0 10px;">${escapeHtml(row.supplemental_report)}</p>
+        ` : ''}
+        ${row.reviewed_by ? `<p class="muted" style="margin:0 0 10px;">Last reviewed by ${escapeHtml(row.reviewed_by)} on ${new Date(row.reviewed_at).toLocaleString()}</p>` : ''}
+
+        <div class="row2">
+          <div>
+            <div class="section-label">Status</div>
+            <select id="statusInput-${row.entry_id}">
+              <option value="pending" ${row.status === 'pending' ? 'selected' : ''}>Pending</option>
+              <option value="under_review" ${row.status === 'under_review' ? 'selected' : ''}>Under Review</option>
+              <option value="sanctioned" ${row.status === 'sanctioned' ? 'selected' : ''}>Sanctioned</option>
+              <option value="dismissed" ${row.status === 'dismissed' ? 'selected' : ''}>Dismissed</option>
+            </select>
+          </div>
+          <div>
+            <div class="section-label">Decision</div>
+            <input type="text" id="decisionInput-${row.entry_id}" value="${escapeHtml(row.decision || '')}" placeholder="e.g. 1-game suspension" style="width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:6px; font-size:14px;" />
+          </div>
+        </div>
+
+        <div class="section-label">Committee Notes</div>
+        <textarea id="notesInput-${row.entry_id}" placeholder="Internal notes...">${escapeHtml(row.committee_notes || '')}</textarea>
+
+        <div style="margin-top:12px; display:flex; align-items:center; gap:10px;">
+          <button onclick="saveReview(${row.entry_id})">Save</button>
+          <span id="saveResult-${row.entry_id}" class="muted"></span>
+        </div>
+      </div>
+    `;
+  }
+
+  async function saveReview(entryId) {
+    const resultEl = document.getElementById('saveResult-' + entryId);
+    resultEl.textContent = 'Saving...';
+
+    const status = document.getElementById('statusInput-' + entryId).value;
+    const decision = document.getElementById('decisionInput-' + entryId).value.trim();
+    const committeeNotes = document.getElementById('notesInput-' + entryId).value.trim();
+
+    try {
+      const res = await fetch('/api/misconduct/' + entryId + '/review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status, decision, committeeNotes }),
       });
-  </script>
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Unknown error');
+      resultEl.textContent = 'Saved.';
+      await loadMisconduct(); // refresh so the badge/status reflects the change
+      expandedEntryId = entryId;
+      renderResults();
+    } catch (e) {
+      resultEl.innerHTML = '<span class="err">Failed: ' + escapeHtml(e.message) + '</span>';
+    }
+  }
+
+  function escapeHtml(str) {
+    return String(str == null ? '' : str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  init();
+</script>
 </body>
 </html>

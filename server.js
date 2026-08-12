@@ -19,12 +19,18 @@
 //   DATABASE_URL                   - same Supabase/Postgres instance matchday uses
 //   PORT                           - (optional) most hosts set this automatically
 //
-// DEPLOYMENT NOTE: SportsEngine's OAuth setup has only been confirmed working
-// with Postman's testing redirect URI (oauth.pstmn.io) throughout this
-// project so far. Whether an arbitrary custom redirect_uri (this app's real
-// callback URL) is accepted without any additional registration on
-// SportsEngine's side is UNCONFIRMED - test this early once deployed, before
-// assuming the login flow will work in production.
+// CONFIRMED DEPLOYMENT CONSTRAINT: the SportsEngine app (client_id) used by
+// this whole project allows only ONE registered redirect URI at a time - not
+// one per app. Since matchday and the stat-tracking app only need a redirect
+// URI occasionally (manually, in Postman, to refresh their shared token) but
+// THIS app needs one live and reachable during real user logins, the ONE
+// registered URI is set to THIS app's own /oauth/callback - and that same
+// route doubles as a manual code-display page (like Postman's own testing
+// callback) whenever it receives a request that isn't a real login attempt
+// (detected via a state-mismatch - see below). This is why ADMIN_BASE_URL
+// must be set to this app's actual public URL, and why that same URL is
+// what should be entered as the redirect_uri when manually visiting the
+// authorize URL for the other two apps' token refresh in Postman too.
 
 const http = require('http');
 const https = require('https');
@@ -231,9 +237,26 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(400, { 'Content-Type': 'text/plain' });
       return res.end('Missing authorization code.');
     }
+
+    // If the state doesn't match, this wasn't initiated through our own
+    // /oauth/login (e.g. someone visited the authorize URL directly, in
+    // Postman, to manually get a code/token for the stat-tracking or
+    // matchday apps - both of which use a manually-refreshed shared token
+    // rather than live per-user login). Rather than reject this outright,
+    // just display the code - the same role Postman's oauth.pstmn.io
+    // testing page normally plays. This lets ONE registered redirect URI
+    // (SportsEngine only allows one) serve both purposes: real admin
+    // console logins, and manual token generation for the other two apps.
     if (!returnedState || returnedState !== expectedState) {
-      res.writeHead(403, { 'Content-Type': 'text/plain' });
-      return res.end('State mismatch - possible CSRF attempt, or your login session expired. Try logging in again.');
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      return res.end(`
+        <!DOCTYPE html><html><body style="font-family: -apple-system, sans-serif; padding: 40px; max-width: 600px; margin: 0 auto;">
+          <h2>Authorization Code</h2>
+          <p>This wasn't a real admin console login attempt (no matching login session), so here's the raw code instead — for manually generating a token in Postman for the stat-tracking or matchday apps.</p>
+          <p style="background:#f4f6fa; padding:14px; border-radius:8px; word-break:break-all; font-family:monospace;">${code}</p>
+          <p style="color:#888; font-size:13px;">This code expires quickly — copy it and complete the token exchange in Postman right away.</p>
+        </body></html>
+      `);
     }
 
     try {
@@ -276,6 +299,130 @@ const server = http.createServer(async (req, res) => {
     }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ name: session.name, email: session.email, seUserId: session.se_user_id }));
+  }
+
+  // GET /api/misconduct/teams — distinct team list, for populating the filter dropdown
+  if (req.method === 'GET' && url.pathname === '/api/misconduct/teams') {
+    const session = await getSession(cookies.admin_session);
+    if (!session) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Not logged in' }));
+    }
+    try {
+      const result = await pool.query(`
+        SELECT DISTINCT team_id, team_name FROM match_report_entries
+        WHERE event_type IN ('Yellow Card', 'Red Card')
+        ORDER BY team_name
+      `);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ teams: result.rows }));
+    } catch (err) {
+      console.error('[api/misconduct/teams] Error:', err.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  // GET /api/misconduct — filtered, sorted misconduct list, joined with review status
+  if (req.method === 'GET' && url.pathname === '/api/misconduct') {
+    const session = await getSession(cookies.admin_session);
+    if (!session) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Not logged in' }));
+    }
+    try {
+      const includeYellow = url.searchParams.get('includeYellow') === 'true';
+      const teamId = url.searchParams.get('teamId') || null;
+      const playerName = url.searchParams.get('playerName') || null;
+      const dateFrom = url.searchParams.get('dateFrom') || null;
+      const dateTo = url.searchParams.get('dateTo') || null;
+
+      const eventTypes = includeYellow ? ['Yellow Card', 'Red Card'] : ['Red Card'];
+
+      const conditions = ['e.event_type = ANY($1)'];
+      const params = [eventTypes];
+      let paramIdx = 2;
+
+      if (teamId) { conditions.push(`e.team_id = $${paramIdx++}`); params.push(teamId); }
+      if (playerName) { conditions.push(`e.name ILIKE $${paramIdx++}`); params.push('%' + playerName + '%'); }
+      if (dateFrom) { conditions.push(`s.game_date >= $${paramIdx++}`); params.push(dateFrom); }
+      if (dateTo) { conditions.push(`s.game_date <= $${paramIdx++}`); params.push(dateTo); }
+
+      const query = `
+        SELECT
+          e.id AS entry_id, e.game_id, e.team_id, e.team_name, e.person_type,
+          e.profile_id, e.name, e.event_type, e.minute, e.reason, e.supplemental_report,
+          s.game_date,
+          r.status, r.decision, r.committee_notes, r.reviewed_by, r.reviewed_at
+        FROM match_report_entries e
+        LEFT JOIN match_report_scores s ON s.game_id = e.game_id
+        LEFT JOIN misconduct_reviews r ON r.entry_id = e.id
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY s.game_date DESC NULLS LAST, e.minute DESC NULLS LAST
+      `;
+
+      const result = await pool.query(query, params);
+      // No review row yet = implicitly 'pending' - reflect that in the response
+      // rather than leaving status as null for the frontend to special-case.
+      const rows = result.rows.map(row => ({ ...row, status: row.status || 'pending' }));
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ misconduct: rows }));
+    } catch (err) {
+      console.error('[api/misconduct] Error:', err.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  // POST /api/misconduct/:entryId/review — create/update the review status, decision, and notes for one incident
+  const reviewMatch = url.pathname.match(/^\/api\/misconduct\/(\d+)\/review$/);
+  if (req.method === 'POST' && reviewMatch) {
+    const session = await getSession(cookies.admin_session);
+    if (!session) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Not logged in' }));
+    }
+    const entryId = parseInt(reviewMatch[1], 10);
+
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', async () => {
+      let payload;
+      try {
+        payload = JSON.parse(body);
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'Invalid JSON body' }));
+      }
+
+      const { status, decision, committeeNotes } = payload;
+      const VALID_STATUSES = ['pending', 'under_review', 'sanctioned', 'dismissed'];
+      if (!VALID_STATUSES.includes(status)) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'status must be one of: ' + VALID_STATUSES.join(', ') }));
+      }
+
+      try {
+        await pool.query(
+          `INSERT INTO misconduct_reviews (entry_id, status, decision, committee_notes, reviewed_by, reviewed_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, now(), now())
+           ON CONFLICT (entry_id) DO UPDATE SET
+             status = EXCLUDED.status, decision = EXCLUDED.decision, committee_notes = EXCLUDED.committee_notes,
+             reviewed_by = EXCLUDED.reviewed_by, reviewed_at = now(), updated_at = now()`,
+          [entryId, status, decision || null, committeeNotes || null, session.name]
+        );
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      } catch (err) {
+        console.error('[api/misconduct/review POST] Error:', err.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
   }
 
   // GET / — the main page. Requires a valid session; redirects to login if not.
