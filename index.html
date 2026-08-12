@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>USCCS Admin Console</title>
+  <style>
+    :root { --navy: #11213F; --gold: #E7C247; --bg: #F4F6FA; --border: #E1E5EC; }
+    body { font-family: -apple-system, sans-serif; background: var(--bg); margin: 0; }
+    header { background: var(--navy); color: var(--gold); padding: 14px 20px; font-weight: 700; display: flex; justify-content: space-between; align-items: center; }
+    header a { color: #fff; font-size: 13px; text-decoration: none; }
+    main { max-width: 700px; margin: 0 auto; padding: 24px; }
+    .card { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
+  </style>
+</head>
+<body>
+  <header>
+    USCCS Admin Console
+    <a href="/oauth/logout">Log out</a>
+  </header>
+  <main>
+    <div class="card">
+      <h2>Stage 1 test page</h2>
+      <p>If you're seeing this, the full login chain worked: OAuth redirect → SportsEngine login → orgAdmin check → session created.</p>
+      <div id="whoami">Loading identity...</div>
+    </div>
+  </main>
+  <script>
+    fetch('/api/whoami')
+      .then(r => r.json())
+      .then(data => {
+        document.getElementById('whoami').innerHTML =
+          '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+      });
+  </script>
+</body>
+</html>
