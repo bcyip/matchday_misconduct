@@ -36,6 +36,9 @@
     .badge-sanctioned { background: #FBEAE8; color: var(--danger); }
     .badge-dismissed { background: #E9F6EE; color: var(--success); }
 
+    .status-legend { display: flex; flex-wrap: wrap; gap: 16px; padding-bottom: 14px; margin-bottom: 14px; border-bottom: 1px solid var(--border); }
+    .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--gray); }
+
     .detail-panel { padding: 16px; background: var(--bg); border-radius: 8px; margin: 4px 0 14px; }
     .detail-panel .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 12px; }
     .detail-panel textarea, .detail-panel select { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; font-family: inherit; }
@@ -85,6 +88,12 @@
   </div>
 
   <div class="card">
+    <div class="status-legend">
+      <div class="legend-item"><span class="badge badge-pending">pending</span> No review has started yet.</div>
+      <div class="legend-item"><span class="badge badge-under_review">under review</span> Committee has begun reviewing, no decision made yet.</div>
+      <div class="legend-item"><span class="badge badge-sanctioned">sanctioned</span> Committee has decided disciplinary action is warranted.</div>
+      <div class="legend-item"><span class="badge badge-dismissed">dismissed</span> Reviewed — no further action needed.</div>
+    </div>
     <div id="resultsMeta" class="muted" style="margin-bottom:10px;"></div>
     <table>
       <thead>
