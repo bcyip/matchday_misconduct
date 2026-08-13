@@ -222,8 +222,8 @@
             </select>
           </div>
           <div>
-            <div class="section-label">Decision</div>
-            <input type="text" id="decisionInput-${row.entry_id}" value="${escapeHtml(row.decision || '')}" placeholder="e.g. 1-game suspension" style="width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:6px; font-size:14px;" />
+            <div class="section-label">Games Suspended</div>
+            <input type="number" inputmode="numeric" min="0" id="decisionInput-${row.entry_id}" value="${escapeHtml(row.decision || '')}" placeholder="e.g. 2" style="width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:6px; font-size:14px;" />
           </div>
         </div>
 
