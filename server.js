@@ -354,10 +354,12 @@ const server = http.createServer(async (req, res) => {
           e.id AS entry_id, e.game_id, e.team_id, e.team_name, e.person_type,
           e.profile_id, e.name, e.event_type, e.minute, e.reason, e.supplemental_report,
           s.game_date,
-          r.status, r.decision, r.committee_notes, r.reviewed_by, r.reviewed_at
+          r.status, r.committee_notes, r.reviewed_by, r.reviewed_at,
+          sus.games_suspended, sus.standard_games
         FROM match_report_entries e
         LEFT JOIN match_report_scores s ON s.game_id = e.game_id
         LEFT JOIN misconduct_reviews r ON r.entry_id = e.id
+        LEFT JOIN suspensions sus ON sus.entry_id = e.id
         WHERE ${conditions.join(' AND ')}
         ORDER BY s.game_date DESC NULLS LAST, e.minute DESC NULLS LAST
       `;
@@ -377,7 +379,10 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // POST /api/misconduct/:entryId/review — create/update the review status, decision, and notes for one incident
+  // POST /api/misconduct/:entryId/review — update review status, notes, and
+  // (if a suspension already exists for this entry) the current games
+  // suspended. NEVER creates or deletes a suspension - matchday already
+  // auto-created it at submission time, and it is never removed.
   const reviewMatch = url.pathname.match(/^\/api\/misconduct\/(\d+)\/review$/);
   if (req.method === 'POST' && reviewMatch) {
     const session = await getSession(cookies.admin_session);
@@ -398,28 +403,63 @@ const server = http.createServer(async (req, res) => {
         return res.end(JSON.stringify({ error: 'Invalid JSON body' }));
       }
 
-      const { status, decision, committeeNotes } = payload;
-      const VALID_STATUSES = ['pending', 'under_review', 'sanctioned', 'dismissed'];
+      const { status, committeeNotes, gamesSuspended } = payload;
+      const VALID_STATUSES = ['pending', 'reviewed'];
       if (!VALID_STATUSES.includes(status)) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: 'status must be one of: ' + VALID_STATUSES.join(', ') }));
       }
 
+      // gamesSuspended is only meaningful/settable if a suspension already
+      // exists for this entry (i.e. it was a Red Card - Yellow Cards never
+      // get one). If provided, it must be a non-negative integer (0 is
+      // valid - e.g. a 1-game standard reduced to 0 on appeal).
+      let parsedGames = null;
+      if (gamesSuspended !== undefined && gamesSuspended !== null && gamesSuspended !== '') {
+        parsedGames = parseInt(gamesSuspended, 10);
+        if (!Number.isInteger(parsedGames) || parsedGames < 0) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'Games Suspended must be a non-negative number.' }));
+        }
+      }
+
+      const client = await pool.connect();
       try {
-        await pool.query(
-          `INSERT INTO misconduct_reviews (entry_id, status, decision, committee_notes, reviewed_by, reviewed_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5, now(), now())
+        await client.query('BEGIN');
+
+        const reviewResult = await client.query(
+          `INSERT INTO misconduct_reviews (entry_id, status, committee_notes, reviewed_by, reviewed_at, updated_at)
+           VALUES ($1, $2, $3, $4, now(), now())
            ON CONFLICT (entry_id) DO UPDATE SET
-             status = EXCLUDED.status, decision = EXCLUDED.decision, committee_notes = EXCLUDED.committee_notes,
-             reviewed_by = EXCLUDED.reviewed_by, reviewed_at = now(), updated_at = now()`,
-          [entryId, status, decision || null, committeeNotes || null, session.name]
+             status = EXCLUDED.status, committee_notes = EXCLUDED.committee_notes,
+             reviewed_by = EXCLUDED.reviewed_by, reviewed_at = now(), updated_at = now()
+           RETURNING id`,
+          [entryId, status, committeeNotes || null, session.name]
         );
+        const reviewId = reviewResult.rows[0].id;
+
+        let suspensionUpdated = false;
+        if (parsedGames !== null) {
+          // UPDATE only - if no suspension row exists for this entry (e.g.
+          // it's a Yellow Card, or something went wrong at submission),
+          // this correctly affects 0 rows rather than creating one here.
+          const updateResult = await client.query(
+            `UPDATE suspensions SET games_suspended = $1, review_id = $2 WHERE entry_id = $3`,
+            [parsedGames, reviewId, entryId]
+          );
+          suspensionUpdated = updateResult.rowCount > 0;
+        }
+
+        await client.query('COMMIT');
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true }));
+        res.end(JSON.stringify({ success: true, suspensionUpdated, gamesSuspended: parsedGames }));
       } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
         console.error('[api/misconduct/review POST] Error:', err.message);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: err.message }));
+      } finally {
+        client.release();
       }
     });
     return;

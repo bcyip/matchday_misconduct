@@ -32,9 +32,7 @@
 
     .badge { display: inline-block; padding: 3px 10px; border-radius: 10px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .02em; }
     .badge-pending { background: #EEF1F8; color: var(--gray); }
-    .badge-under_review { background: #DCEFFB; color: #1B5E80; }
-    .badge-sanctioned { background: #FBEAE8; color: var(--danger); }
-    .badge-dismissed { background: #E9F6EE; color: var(--success); }
+    .badge-reviewed { background: #E9F6EE; color: var(--success); }
 
     .status-legend { display: flex; flex-wrap: wrap; gap: 16px; padding-bottom: 14px; margin-bottom: 14px; border-bottom: 1px solid var(--border); }
     .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--gray); }
@@ -89,10 +87,8 @@
 
   <div class="card">
     <div class="status-legend">
-      <div class="legend-item"><span class="badge badge-pending">pending</span> No review has started yet.</div>
-      <div class="legend-item"><span class="badge badge-under_review">under review</span> Committee has begun reviewing, no decision made yet.</div>
-      <div class="legend-item"><span class="badge badge-sanctioned">sanctioned</span> Committee has decided disciplinary action is warranted.</div>
-      <div class="legend-item"><span class="badge badge-dismissed">dismissed</span> Reviewed — no further action needed.</div>
+      <div class="legend-item"><span class="badge badge-pending">pending</span> Standard suspension applied automatically — not yet reviewed by committee.</div>
+      <div class="legend-item"><span class="badge badge-reviewed">reviewed</span> Committee has reviewed — standard suspension confirmed, reduced, or increased.</div>
     </div>
     <div id="resultsMeta" class="muted" style="margin-bottom:10px;"></div>
     <table>
@@ -104,6 +100,7 @@
           <th>Type</th>
           <th>Reason</th>
           <th>Min</th>
+          <th>Games</th>
           <th>Status</th>
         </tr>
       </thead>
@@ -173,7 +170,7 @@
     document.getElementById('resultsMeta').textContent = misconductData.length + ' incident(s) found';
 
     if (!misconductData.length) {
-      tbody.innerHTML = '<tr><td colspan="7" class="muted">No misconduct matches these filters.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" class="muted">No misconduct matches these filters.</td></tr>';
       return;
     }
 
@@ -187,11 +184,14 @@
           <td>${row.event_type === 'Red Card' ? '🟥' : '🟨'} ${row.event_type}</td>
           <td>${escapeHtml(row.reason || '—')}</td>
           <td>${row.minute != null ? row.minute : '—'}</td>
+          <td>${row.event_type === 'Red Card'
+            ? `${row.games_suspended != null ? row.games_suspended : row.standard_games}${row.games_suspended != null && row.games_suspended !== row.standard_games ? ' <span class="muted">(std: ' + row.standard_games + ')</span>' : ''}`
+            : '—'}</td>
           <td><span class="badge badge-${row.status}">${row.status.replace('_', ' ')}</span></td>
         </tr>
       `;
       const detailHtml = expandedEntryId === row.entry_id
-        ? `<tr><td colspan="7">${renderDetailPanel(row)}</td></tr>`
+        ? `<tr><td colspan="8">${renderDetailPanel(row)}</td></tr>`
         : '';
       return rowHtml + detailHtml;
     }).join('');
@@ -203,6 +203,9 @@
   }
 
   function renderDetailPanel(row) {
+    const hasSuspension = row.event_type === 'Red Card';
+    const currentGames = row.games_suspended != null ? row.games_suspended : row.standard_games;
+
     return `
       <div class="detail-panel">
         ${row.supplemental_report ? `
@@ -216,45 +219,48 @@
             <div class="section-label">Status</div>
             <select id="statusInput-${row.entry_id}">
               <option value="pending" ${row.status === 'pending' ? 'selected' : ''}>Pending</option>
-              <option value="under_review" ${row.status === 'under_review' ? 'selected' : ''}>Under Review</option>
-              <option value="sanctioned" ${row.status === 'sanctioned' ? 'selected' : ''}>Sanctioned</option>
-              <option value="dismissed" ${row.status === 'dismissed' ? 'selected' : ''}>Dismissed</option>
+              <option value="reviewed" ${row.status === 'reviewed' ? 'selected' : ''}>Reviewed</option>
             </select>
           </div>
-          <div>
-            <div class="section-label">Games Suspended</div>
-            <input type="number" inputmode="numeric" min="0" id="decisionInput-${row.entry_id}" value="${escapeHtml(row.decision || '')}" placeholder="e.g. 2" style="width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:6px; font-size:14px;" />
-          </div>
+          ${hasSuspension ? `
+            <div>
+              <div class="section-label">Games Suspended <span class="muted" style="text-transform:none; font-weight:400;">(standard: ${row.standard_games})</span></div>
+              <input type="number" inputmode="numeric" min="0" id="gamesInput-${row.entry_id}" value="${currentGames}" style="width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:6px; font-size:14px;" />
+            </div>
+          ` : `<div class="muted" style="align-self:flex-end; padding-bottom:8px;">No suspension applies (Yellow Card).</div>`}
         </div>
 
         <div class="section-label">Committee Notes</div>
         <textarea id="notesInput-${row.entry_id}" placeholder="Internal notes...">${escapeHtml(row.committee_notes || '')}</textarea>
 
         <div style="margin-top:12px; display:flex; align-items:center; gap:10px;">
-          <button onclick="saveReview(${row.entry_id})">Save</button>
+          <button onclick="saveReview(${row.entry_id}, ${hasSuspension})">Save</button>
           <span id="saveResult-${row.entry_id}" class="muted"></span>
         </div>
       </div>
     `;
   }
 
-  async function saveReview(entryId) {
+  async function saveReview(entryId, hasSuspension) {
     const resultEl = document.getElementById('saveResult-' + entryId);
     resultEl.textContent = 'Saving...';
 
     const status = document.getElementById('statusInput-' + entryId).value;
-    const decision = document.getElementById('decisionInput-' + entryId).value.trim();
     const committeeNotes = document.getElementById('notesInput-' + entryId).value.trim();
+    const gamesSuspended = hasSuspension ? document.getElementById('gamesInput-' + entryId).value.trim() : undefined;
 
     try {
       const res = await fetch('/api/misconduct/' + entryId + '/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status, decision, committeeNotes }),
+        body: JSON.stringify({ status, committeeNotes, gamesSuspended }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || 'Unknown error');
-      resultEl.textContent = 'Saved.';
+
+      resultEl.textContent = json.suspensionUpdated
+        ? `Saved. Suspension now: ${json.gamesSuspended} game(s).`
+        : 'Saved.';
       await loadMisconduct(); // refresh so the badge/status reflects the change
       expandedEntryId = entryId;
       renderResults();
