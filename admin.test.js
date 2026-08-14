@@ -2,25 +2,25 @@
 //
 // IMPORTANT DIFFERENCE FROM matchday's test suite: every route here requires
 // a real login session, and real OAuth login can't be scripted without an
-// actual browser (SportsEngine's login page, real credentials). So this
-// suite creates a SYNTHETIC session directly in Postgres - bypassing the
-// browser-only login step specifically, not the actual authorization logic
-// each endpoint runs (every endpoint still does its own real session lookup
-// against the database, exactly as it would for a real logged-in user).
-// This tests "does the app correctly behave once someone is logged in,"
-// not "does the OAuth login flow itself work" - that part stays manual
-// (see the accompanying admin_console_test_plan.md).
+// actual browser. So this suite creates a SYNTHETIC session directly in
+// Postgres - bypassing the browser-only login step specifically, not the
+// actual authorization logic each endpoint runs.
+//
+// ARCHITECTURE THIS SUITE TESTS (as of the auto-suspension rework):
+//   - Suspensions are auto-created by MATCHDAY at match-report submission
+//     time, not by this admin console. Since this suite doesn't call
+//     matchday's API, createTestIncident() below simulates that by
+//     directly inserting the suspension row matchday would have created,
+//     using the same STANDARD_SUSPENSION_GAMES mapping matchday uses.
+//   - misconduct_reviews.status is just 'pending' / 'reviewed'.
+//   - The review-save endpoint NEVER creates or deletes a suspension - it
+//     only ever UPDATEs games_suspended on an already-existing row.
+//   - Suspensions are never deleted, regardless of status changes.
 //
 // Usage:
 //   TEST_BASE_URL=https://your-admin-console.onrender.com \
 //   TEST_DATABASE_URL=postgresql://... \
 //   node --test test/
-//
-// SAFETY: this connects directly to whatever Postgres instance
-// TEST_DATABASE_URL points at. Do NOT point this at a database with real
-// misconduct data you don't want touched - use a QA/test database, or at
-// minimum be aware this creates and cleans up rows with clearly-synthetic
-// IDs (see randomId() below).
 
 const { test, describe, after } = require('node:test');
 const assert = require('node:assert');
@@ -33,16 +33,20 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 });
 
+// Must match matchday's server.js mapping exactly.
+const STANDARD_SUSPENSION_GAMES = {
+  'Serious Foul Play': 1, 'DOGSO-F': 1, 'DOGSO-H': 1, '2nd Caution': 1,
+  'Violent Conduct': 3, 'Abusive Language': 3, 'Biting or Spitting': 3,
+};
+
 function randomId(prefix) {
   return prefix + '-' + crypto.randomBytes(6).toString('hex');
 }
 
-// ---------- Synthetic session + test data setup ----------
-
 async function createSyntheticSession(name = 'Test Admin') {
   const sessionId = crypto.randomBytes(32).toString('hex');
   const seUserId = randomId('test-admin-user');
-  const sessionExpiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+  const sessionExpiresAt = new Date(Date.now() + 60 * 60 * 1000);
   const seTokenExpiresAt = new Date(Date.now() + 30 * 60 * 1000);
 
   await pool.query(
@@ -60,8 +64,8 @@ async function destroySession(sessionId) {
 
 /**
  * Creates a full synthetic match report (scores + one entry) directly in
- * Postgres, so the misconduct list/filter endpoints have real rows to
- * query against without depending on the separate matchday app's HTTP API.
+ * Postgres. For Red Cards, ALSO creates the suspension row - simulating
+ * what matchday's server does automatically at submission time.
  */
 async function createTestIncident({ gameId, teamId, teamName, gameDate, eventType, reason, minute, supplementalReport }) {
   await pool.query(
@@ -71,20 +75,37 @@ async function createTestIncident({ gameId, teamId, teamName, gameDate, eventTyp
     [gameId, gameDate, teamId, teamName]
   );
 
+  const profileId = randomId('test-player');
+  const playerName = 'Test Player';
+
   const result = await pool.query(
     `INSERT INTO match_report_entries (game_id, team_id, team_name, person_type, profile_id, name, event_type, minute, reason, supplemental_report, submitted_at)
      VALUES ($1, $2, $3, 'player', $4, $5, $6, $7, $8, $9, now())
      RETURNING id`,
-    [gameId, teamId, teamName, randomId('test-player'), 'Test Player', eventType, minute, reason, supplementalReport]
+    [gameId, teamId, teamName, profileId, playerName, eventType, minute, reason, supplementalReport]
   );
+  const entryId = result.rows[0].id;
 
-  return result.rows[0].id; // entry_id
+  if (eventType === 'Red Card') {
+    const standardGames = STANDARD_SUSPENSION_GAMES[reason];
+    await pool.query(
+      `INSERT INTO suspensions (entry_id, profile_id, team_id, team_name, player_name, games_suspended, standard_games, issued_from_game_date, status, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $6, $7, 'active', now())`,
+      [entryId, profileId, teamId, teamName, playerName, standardGames, gameDate]
+    );
+  }
+
+  return entryId;
 }
 
 async function cleanupIncident(gameId) {
+  const entries = await pool.query('SELECT id FROM match_report_entries WHERE game_id = $1', [gameId]);
+  for (const row of entries.rows) {
+    await pool.query('DELETE FROM suspensions WHERE entry_id = $1', [row.id]);
+    await pool.query('DELETE FROM misconduct_reviews WHERE entry_id = $1', [row.id]);
+  }
   await pool.query('DELETE FROM match_report_entries WHERE game_id = $1', [gameId]);
   await pool.query('DELETE FROM match_report_scores WHERE game_id = $1', [gameId]);
-  await pool.query(`DELETE FROM misconduct_reviews WHERE entry_id NOT IN (SELECT id FROM match_report_entries)`);
 }
 
 async function apiGet(path, sessionId) {
@@ -110,22 +131,18 @@ async function apiPost(path, payload, sessionId) {
   return { status: res.status, body };
 }
 
-// ---------- Authorization gating ----------
-
 describe('Authorization', () => {
   test('protected endpoints reject requests with no session cookie', async () => {
     const listRes = await apiGet('/api/misconduct', null);
     assert.strictEqual(listRes.status, 401);
-
     const teamsRes = await apiGet('/api/misconduct/teams', null);
     assert.strictEqual(teamsRes.status, 401);
-
     const reviewRes = await apiPost('/api/misconduct/1/review', { status: 'pending' }, null);
     assert.strictEqual(reviewRes.status, 401);
   });
 
   test('protected endpoints reject an invalid/nonexistent session id', async () => {
-    const fakeSessionId = crypto.randomBytes(32).toString('hex'); // well-formed but never created
+    const fakeSessionId = crypto.randomBytes(32).toString('hex');
     const res = await apiGet('/api/misconduct', fakeSessionId);
     assert.strictEqual(res.status, 401);
   });
@@ -138,10 +155,8 @@ describe('Authorization', () => {
   });
 });
 
-// ---------- Misconduct list: filtering ----------
-
 describe('Misconduct list filtering', () => {
-  test('defaults to Red Cards only - Yellow Cards excluded unless requested', async () => {
+  test('defaults to Red Cards only, and includes games_suspended/standard_games for them', async () => {
     const sessionId = await createSyntheticSession();
     const gameId = randomId('test-game');
     const teamId = randomId('test-team');
@@ -157,12 +172,14 @@ describe('Misconduct list filtering', () => {
     });
 
     const defaultRes = await apiGet('/api/misconduct?teamId=' + teamId, sessionId);
-    const defaultIds = defaultRes.body.misconduct.map(m => m.entry_id);
-    assert.ok(defaultIds.includes(rcEntryId), 'RC should be included by default');
-    assert.strictEqual(defaultRes.body.misconduct.every(m => m.event_type === 'Red Card'), true, 'default results should be RC only');
+    assert.strictEqual(defaultRes.body.misconduct.every(m => m.event_type === 'Red Card'), true);
+
+    const rcRow = defaultRes.body.misconduct.find(m => m.entry_id === rcEntryId);
+    assert.strictEqual(rcRow.standard_games, 3, 'Violent Conduct standard should be 3');
+    assert.strictEqual(rcRow.games_suspended, 3, 'should start equal to standard, unadjusted');
 
     const withYellowRes = await apiGet('/api/misconduct?teamId=' + teamId + '&includeYellow=true', sessionId);
-    assert.strictEqual(withYellowRes.body.misconduct.length, 2, 'includeYellow=true should return both');
+    assert.strictEqual(withYellowRes.body.misconduct.length, 2);
 
     await cleanupIncident(gameId);
     await cleanupIncident(ycGameId);
@@ -175,19 +192,13 @@ describe('Misconduct list filtering', () => {
     const olderGameId = randomId('test-game');
     const newerGameId = randomId('test-game');
 
-    await createTestIncident({
-      gameId: olderGameId, teamId, teamName: 'Test Team', gameDate: '2026-08-01',
-      eventType: 'Red Card', reason: 'Serious Foul Play', minute: 20, supplementalReport: 'Older incident.',
-    });
-    await createTestIncident({
-      gameId: newerGameId, teamId, teamName: 'Test Team', gameDate: '2026-10-15',
-      eventType: 'Red Card', reason: 'Serious Foul Play', minute: 20, supplementalReport: 'Newer incident.',
-    });
+    await createTestIncident({ gameId: olderGameId, teamId, teamName: 'Test Team', gameDate: '2026-08-01', eventType: 'Red Card', reason: 'Serious Foul Play', minute: 20, supplementalReport: 'Older.' });
+    await createTestIncident({ gameId: newerGameId, teamId, teamName: 'Test Team', gameDate: '2026-10-15', eventType: 'Red Card', reason: 'Serious Foul Play', minute: 20, supplementalReport: 'Newer.' });
 
     const res = await apiGet('/api/misconduct?teamId=' + teamId, sessionId);
     const gameIdsInOrder = res.body.misconduct.map(m => m.game_id);
-    assert.strictEqual(gameIdsInOrder[0], newerGameId, 'newest game should appear first');
-    assert.strictEqual(gameIdsInOrder[1], olderGameId, 'older game should appear second');
+    assert.strictEqual(gameIdsInOrder[0], newerGameId);
+    assert.strictEqual(gameIdsInOrder[1], olderGameId);
 
     await cleanupIncident(olderGameId);
     await cleanupIncident(newerGameId);
@@ -224,8 +235,8 @@ describe('Misconduct list filtering', () => {
 
     const res = await apiGet('/api/misconduct?teamId=' + teamId + '&dateFrom=2026-09-01&dateTo=2026-10-01', sessionId);
     const gameIds = res.body.misconduct.map(m => m.game_id);
-    assert.ok(gameIds.includes(insideGame), 'incident inside the range should be included');
-    assert.ok(!gameIds.includes(outsideGame), 'incident outside the range should be excluded');
+    assert.ok(gameIds.includes(insideGame));
+    assert.ok(!gameIds.includes(outsideGame));
 
     await cleanupIncident(insideGame);
     await cleanupIncident(outsideGame);
@@ -233,10 +244,28 @@ describe('Misconduct list filtering', () => {
   });
 });
 
-// ---------- Review save/upsert ----------
-
 describe('Review save workflow', () => {
-  test('saving a review updates status/decision/notes and stamps the reviewer name', async () => {
+  test('a new incident starts as pending, with the suspension already at standard value', async () => {
+    const sessionId = await createSyntheticSession();
+    const gameId = randomId('test-game');
+    const teamId = randomId('test-team');
+
+    const entryId = await createTestIncident({
+      gameId, teamId, teamName: 'Test Team', gameDate: '2026-09-01',
+      eventType: 'Red Card', reason: 'Serious Foul Play', minute: 55, supplementalReport: 'Incident details.',
+    });
+
+    const res = await apiGet('/api/misconduct?teamId=' + teamId, sessionId);
+    const row = res.body.misconduct.find(m => m.entry_id === entryId);
+    assert.strictEqual(row.status, 'pending');
+    assert.strictEqual(row.standard_games, 1);
+    assert.strictEqual(row.games_suspended, 1);
+
+    await cleanupIncident(gameId);
+    await destroySession(sessionId);
+  });
+
+  test('saving with status=reviewed and a games number updates the suspension and stamps the reviewer', async () => {
     const sessionId = await createSyntheticSession('Committee Member One');
     const gameId = randomId('test-game');
     const teamId = randomId('test-team');
@@ -246,51 +275,62 @@ describe('Review save workflow', () => {
       eventType: 'Red Card', reason: 'Violent Conduct', minute: 55, supplementalReport: 'Incident details.',
     });
 
-    // Before any review, should default to 'pending' with no explicit row
-    const beforeRes = await apiGet('/api/misconduct?teamId=' + teamId, sessionId);
-    assert.strictEqual(beforeRes.body.misconduct[0].status, 'pending');
-
     const saveRes = await apiPost('/api/misconduct/' + entryId + '/review', {
-      status: 'sanctioned', decision: '2', committeeNotes: 'Two game suspension issued.',
+      status: 'reviewed', gamesSuspended: '2', committeeNotes: 'Reduced from standard 3 to 2.',
     }, sessionId);
     assert.strictEqual(saveRes.status, 200);
+    assert.strictEqual(saveRes.body.suspensionUpdated, true);
+    assert.strictEqual(saveRes.body.gamesSuspended, 2);
 
     const afterRes = await apiGet('/api/misconduct?teamId=' + teamId, sessionId);
     const updated = afterRes.body.misconduct.find(m => m.entry_id === entryId);
-    assert.strictEqual(updated.status, 'sanctioned');
-    assert.strictEqual(updated.decision, '2');
-    assert.strictEqual(updated.committee_notes, 'Two game suspension issued.');
+    assert.strictEqual(updated.status, 'reviewed');
+    assert.strictEqual(updated.games_suspended, 2);
+    assert.strictEqual(updated.standard_games, 3);
+    assert.strictEqual(updated.committee_notes, 'Reduced from standard 3 to 2.');
     assert.strictEqual(updated.reviewed_by, 'Committee Member One');
 
     await cleanupIncident(gameId);
     await destroySession(sessionId);
   });
 
-  test('saving a review twice UPDATES the same row, does not create a duplicate', async () => {
+  test('reducing a 1-game standard down to 0 is valid', async () => {
     const sessionId = await createSyntheticSession();
     const gameId = randomId('test-game');
     const teamId = randomId('test-team');
-
     const entryId = await createTestIncident({
       gameId, teamId, teamName: 'Test Team', gameDate: '2026-09-01',
-      eventType: 'Red Card', reason: 'Abusive Language', minute: 70, supplementalReport: 'x',
+      eventType: 'Red Card', reason: 'DOGSO-F', minute: 20, supplementalReport: 'x',
     });
 
-    await apiPost('/api/misconduct/' + entryId + '/review', { status: 'under_review', decision: '', committeeNotes: 'first pass' }, sessionId);
-    await apiPost('/api/misconduct/' + entryId + '/review', { status: 'sanctioned', decision: '1', committeeNotes: 'final decision' }, sessionId);
+    const res = await apiPost('/api/misconduct/' + entryId + '/review', { status: 'reviewed', gamesSuspended: '0', committeeNotes: 'Reduced to 0 on appeal.' }, sessionId);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.gamesSuspended, 0);
 
-    const countResult = await pool.query('SELECT COUNT(*) FROM misconduct_reviews WHERE entry_id = $1', [entryId]);
-    assert.strictEqual(parseInt(countResult.rows[0].count, 10), 1, 'should be exactly 1 review row, not 2');
-
-    const res = await apiGet('/api/misconduct?teamId=' + teamId, sessionId);
-    assert.strictEqual(res.body.misconduct[0].status, 'sanctioned', 'latest save should win');
-    assert.strictEqual(res.body.misconduct[0].committee_notes, 'final decision');
+    const susResult = await pool.query('SELECT games_suspended FROM suspensions WHERE entry_id = $1', [entryId]);
+    assert.strictEqual(susResult.rows[0].games_suspended, 0);
 
     await cleanupIncident(gameId);
     await destroySession(sessionId);
   });
 
-  test('an invalid status value is rejected', async () => {
+  test('a negative games value is rejected', async () => {
+    const sessionId = await createSyntheticSession();
+    const gameId = randomId('test-game');
+    const teamId = randomId('test-team');
+    const entryId = await createTestIncident({
+      gameId, teamId, teamName: 'Test Team', gameDate: '2026-09-01',
+      eventType: 'Red Card', reason: 'DOGSO-H', minute: 20, supplementalReport: 'x',
+    });
+
+    const res = await apiPost('/api/misconduct/' + entryId + '/review', { status: 'reviewed', gamesSuspended: '-1' }, sessionId);
+    assert.strictEqual(res.status, 400);
+
+    await cleanupIncident(gameId);
+    await destroySession(sessionId);
+  });
+
+  test('an invalid status value is rejected (including the old pre-simplification statuses)', async () => {
     const sessionId = await createSyntheticSession();
     const gameId = randomId('test-game');
     const teamId = randomId('test-team');
@@ -299,99 +339,49 @@ describe('Review save workflow', () => {
       eventType: 'Red Card', reason: 'Biting or Spitting', minute: 5, supplementalReport: 'x',
     });
 
-    const res = await apiPost('/api/misconduct/' + entryId + '/review', { status: 'not_a_real_status' }, sessionId);
-    assert.strictEqual(res.status, 400);
+    for (const badStatus of ['under_review', 'sanctioned', 'dismissed', 'not_a_real_status']) {
+      const res = await apiPost('/api/misconduct/' + entryId + '/review', { status: badStatus }, sessionId);
+      assert.strictEqual(res.status, 400, `"${badStatus}" should be rejected under the 2-status model`);
+    }
 
     await cleanupIncident(gameId);
     await destroySession(sessionId);
   });
-});
 
-describe('Suspension issuing', () => {
-  test('marking sanctioned with a valid games number creates an active suspension', async () => {
+  test('the suspension is NEVER deleted, regardless of status changes back and forth', async () => {
     const sessionId = await createSyntheticSession();
     const gameId = randomId('test-game');
     const teamId = randomId('test-team');
     const entryId = await createTestIncident({
-      gameId, teamId, teamName: 'Test Team', gameDate: '2026-09-10',
-      eventType: 'Red Card', reason: 'Serious Foul Play', minute: 60, supplementalReport: 'x',
+      gameId, teamId, teamName: 'Test Team', gameDate: '2026-09-01',
+      eventType: 'Red Card', reason: 'Abusive Language', minute: 70, supplementalReport: 'x',
     });
 
-    const res = await apiPost('/api/misconduct/' + entryId + '/review', { status: 'sanctioned', decision: '2', committeeNotes: 'test' }, sessionId);
+    await apiPost('/api/misconduct/' + entryId + '/review', { status: 'reviewed', gamesSuspended: '2' }, sessionId);
+    await apiPost('/api/misconduct/' + entryId + '/review', { status: 'pending', gamesSuspended: '3' }, sessionId);
+    await apiPost('/api/misconduct/' + entryId + '/review', { status: 'reviewed', gamesSuspended: '1' }, sessionId);
+
+    const susResult = await pool.query('SELECT * FROM suspensions WHERE entry_id = $1', [entryId]);
+    assert.strictEqual(susResult.rows.length, 1, 'suspension should still exist - never deleted');
+    assert.strictEqual(susResult.rows[0].games_suspended, 1);
+
+    await cleanupIncident(gameId);
+    await destroySession(sessionId);
+  });
+
+  test('saving a review for a Yellow Card (no suspension exists) does not error, suspensionUpdated is false', async () => {
+    const sessionId = await createSyntheticSession();
+    const gameId = randomId('test-game');
+    const teamId = randomId('test-team');
+    const entryId = await createTestIncident({
+      gameId, teamId, teamName: 'Test Team', gameDate: '2026-09-01',
+      eventType: 'Yellow Card', reason: 'Dissent', minute: 12, supplementalReport: null,
+    });
+
+    const res = await apiPost('/api/misconduct/' + entryId + '/review', { status: 'reviewed', committeeNotes: 'Noted.' }, sessionId);
     assert.strictEqual(res.status, 200);
-    assert.strictEqual(res.body.suspensionAction, 'issued');
-    assert.strictEqual(res.body.gamesSuspended, 2);
+    assert.strictEqual(res.body.suspensionUpdated, false);
 
-    const susResult = await pool.query('SELECT * FROM suspensions WHERE team_id = $1', [teamId]);
-    assert.strictEqual(susResult.rows.length, 1);
-    assert.strictEqual(susResult.rows[0].games_suspended, 2);
-    assert.strictEqual(susResult.rows[0].status, 'active');
-    assert.strictEqual(new Date(susResult.rows[0].issued_from_game_date).toISOString().slice(0, 10), '2026-09-10');
-
-    await pool.query('DELETE FROM suspensions WHERE team_id = $1', [teamId]);
-    await cleanupIncident(gameId);
-    await destroySession(sessionId);
-  });
-
-  test('marking sanctioned without a valid games number is rejected, no suspension created', async () => {
-    const sessionId = await createSyntheticSession();
-    const gameId = randomId('test-game');
-    const teamId = randomId('test-team');
-    const entryId = await createTestIncident({
-      gameId, teamId, teamName: 'Test Team', gameDate: '2026-09-10',
-      eventType: 'Red Card', reason: 'Serious Foul Play', minute: 60, supplementalReport: 'x',
-    });
-
-    const res = await apiPost('/api/misconduct/' + entryId + '/review', { status: 'sanctioned', decision: '', committeeNotes: 'test' }, sessionId);
-    assert.strictEqual(res.status, 400);
-
-    const susResult = await pool.query('SELECT * FROM suspensions WHERE team_id = $1', [teamId]);
-    assert.strictEqual(susResult.rows.length, 0, 'no suspension should have been created');
-
-    await cleanupIncident(gameId);
-    await destroySession(sessionId);
-  });
-
-  test('reversing a sanctioned decision removes the suspension', async () => {
-    const sessionId = await createSyntheticSession();
-    const gameId = randomId('test-game');
-    const teamId = randomId('test-team');
-    const entryId = await createTestIncident({
-      gameId, teamId, teamName: 'Test Team', gameDate: '2026-09-10',
-      eventType: 'Red Card', reason: 'Serious Foul Play', minute: 60, supplementalReport: 'x',
-    });
-
-    await apiPost('/api/misconduct/' + entryId + '/review', { status: 'sanctioned', decision: '3', committeeNotes: 'initial' }, sessionId);
-    let susResult = await pool.query('SELECT * FROM suspensions WHERE team_id = $1', [teamId]);
-    assert.strictEqual(susResult.rows.length, 1, 'suspension should exist after sanctioning');
-
-    const reverseRes = await apiPost('/api/misconduct/' + entryId + '/review', { status: 'dismissed', decision: '', committeeNotes: 'reversed on appeal' }, sessionId);
-    assert.strictEqual(reverseRes.body.suspensionAction, 'removed');
-
-    susResult = await pool.query('SELECT * FROM suspensions WHERE team_id = $1', [teamId]);
-    assert.strictEqual(susResult.rows.length, 0, 'suspension should be gone after reversing the decision');
-
-    await cleanupIncident(gameId);
-    await destroySession(sessionId);
-  });
-
-  test('re-saving with a different games number updates the same suspension row, does not duplicate', async () => {
-    const sessionId = await createSyntheticSession();
-    const gameId = randomId('test-game');
-    const teamId = randomId('test-team');
-    const entryId = await createTestIncident({
-      gameId, teamId, teamName: 'Test Team', gameDate: '2026-09-10',
-      eventType: 'Red Card', reason: 'Serious Foul Play', minute: 60, supplementalReport: 'x',
-    });
-
-    await apiPost('/api/misconduct/' + entryId + '/review', { status: 'sanctioned', decision: '1', committeeNotes: 'first' }, sessionId);
-    await apiPost('/api/misconduct/' + entryId + '/review', { status: 'sanctioned', decision: '4', committeeNotes: 'corrected' }, sessionId);
-
-    const susResult = await pool.query('SELECT * FROM suspensions WHERE team_id = $1', [teamId]);
-    assert.strictEqual(susResult.rows.length, 1, 'should still be exactly 1 row, not 2');
-    assert.strictEqual(susResult.rows[0].games_suspended, 4, 'should reflect the latest games number');
-
-    await pool.query('DELETE FROM suspensions WHERE team_id = $1', [teamId]);
     await cleanupIncident(gameId);
     await destroySession(sessionId);
   });
@@ -404,10 +394,10 @@ after(async () => {
 /*
  * WHAT THIS SUITE DOES NOT COVER (needs manual testing - see
  * admin_console_test_plan.md):
- *   - The actual OAuth login flow (browser-based, real SportsEngine login)
- *   - The orgAdmin role gate specifically (this suite bypasses login
- *     entirely via a synthetic session, so it never exercises the code path
- *     that checks role_assignments after a real /oauth/me call)
- *   - Session expiry behavior over real time (8-hour cookie lifetime)
- *   - Any visual/UI behavior (badge colors, expand/collapse, filter UI)
+ *   - The actual OAuth login flow, the orgAdmin role gate, session expiry
+ *   - Any visual/UI behavior
+ *   - matchday's OWN auto-suspension-creation logic (simulated here via
+ *     createTestIncident, never calls matchday's real API - that's covered
+ *     separately in matchday.test.js, which also needs updating to test
+ *     the no-resubmission lock and auto-suspension creation)
  */
