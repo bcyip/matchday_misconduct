@@ -324,6 +324,101 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // GET /api/match-reports/filter-options — distinct divisions and teams
+  // currently present in match_report_scores, for populating filter
+  // dropdowns. Divisions only reflect reports submitted after the
+  // division-capture feature was added - older reports have division_id
+  // NULL and won't appear here (not backfilled).
+  if (req.method === 'GET' && url.pathname === '/api/match-reports/filter-options') {
+    const session = await getSession(cookies.admin_session);
+    if (!session) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Not logged in' }));
+    }
+    try {
+      const [divisionsResult, teamsResult] = await Promise.all([
+        pool.query(`SELECT DISTINCT division_id FROM match_report_scores WHERE division_id IS NOT NULL ORDER BY division_id`),
+        pool.query(`
+          SELECT DISTINCT team_id, team_name FROM (
+            SELECT team1_id AS team_id, team1_name AS team_name FROM match_report_scores
+            UNION
+            SELECT team2_id AS team_id, team2_name AS team_name FROM match_report_scores
+          ) t ORDER BY team_name
+        `),
+      ]);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ divisions: divisionsResult.rows, teams: teamsResult.rows }));
+    } catch (err) {
+      console.error('[api/match-reports/filter-options] Error:', err.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  // GET /api/match-reports?division=&dateFrom=&dateTo=&team= — running list
+  // of every submitted match report, with per-team score and Yellow/Red
+  // Card totals aggregated from match_report_entries. This deliberately
+  // only lists reports that HAVE been submitted (a simple running list) -
+  // it does NOT cross-reference the full schedule to find games missing a
+  // report, which would need a second data source (see conversation).
+  if (req.method === 'GET' && url.pathname === '/api/match-reports') {
+    const session = await getSession(cookies.admin_session);
+    if (!session) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Not logged in' }));
+    }
+    try {
+      const division = url.searchParams.get('division');
+      const dateFrom = url.searchParams.get('dateFrom');
+      const dateTo = url.searchParams.get('dateTo');
+      const team = url.searchParams.get('team');
+
+      const conditions = [];
+      const params = [];
+      if (division) { params.push(division); conditions.push(`mrs.division_id = $${params.length}`); }
+      if (dateFrom) { params.push(dateFrom); conditions.push(`mrs.game_date >= $${params.length}`); }
+      if (dateTo) { params.push(dateTo); conditions.push(`mrs.game_date <= $${params.length}`); }
+      if (team) { params.push(team); conditions.push(`(mrs.team1_id = $${params.length} OR mrs.team2_id = $${params.length})`); }
+      const whereClause = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+
+      const result = await pool.query(`
+        SELECT
+          mrs.game_id, mrs.game_date, mrs.division_id, mrs.gender,
+          mrs.team1_id, mrs.team1_name, mrs.team1_score,
+          mrs.team2_id, mrs.team2_name, mrs.team2_score,
+          mrs.submitted_at,
+          COALESCE(t1.yellow_count, 0) AS team1_yellow_count,
+          COALESCE(t1.red_count, 0) AS team1_red_count,
+          COALESCE(t2.yellow_count, 0) AS team2_yellow_count,
+          COALESCE(t2.red_count, 0) AS team2_red_count
+        FROM match_report_scores mrs
+        LEFT JOIN (
+          SELECT game_id, team_id,
+            COUNT(*) FILTER (WHERE event_type = 'Yellow Card') AS yellow_count,
+            COUNT(*) FILTER (WHERE event_type = 'Red Card') AS red_count
+          FROM match_report_entries GROUP BY game_id, team_id
+        ) t1 ON t1.game_id = mrs.game_id AND t1.team_id = mrs.team1_id
+        LEFT JOIN (
+          SELECT game_id, team_id,
+            COUNT(*) FILTER (WHERE event_type = 'Yellow Card') AS yellow_count,
+            COUNT(*) FILTER (WHERE event_type = 'Red Card') AS red_count
+          FROM match_report_entries GROUP BY game_id, team_id
+        ) t2 ON t2.game_id = mrs.game_id AND t2.team_id = mrs.team2_id
+        ${whereClause}
+        ORDER BY mrs.game_date DESC NULLS LAST, mrs.submitted_at DESC
+      `, params);
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ reports: result.rows }));
+    } catch (err) {
+      console.error('[api/match-reports] Error:', err.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
   // GET /api/misconduct — filtered, sorted misconduct list, joined with review status
   if (req.method === 'GET' && url.pathname === '/api/misconduct') {
     const session = await getSession(cookies.admin_session);
@@ -476,6 +571,25 @@ const server = http.createServer(async (req, res) => {
       if (err) {
         res.writeHead(404);
         return res.end('index.html not found — make sure it is in the same folder as server.js');
+      }
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(data);
+    });
+    return;
+  }
+
+  // GET /match-reports — running list of submitted match reports. Same
+  // auth gate as the main page.
+  if (req.method === 'GET' && url.pathname === '/match-reports') {
+    const session = await getSession(cookies.admin_session);
+    if (!session) {
+      res.writeHead(302, { Location: '/oauth/login' });
+      return res.end();
+    }
+    fs.readFile(path.join(__dirname, 'match_reports.html'), 'utf8', (err, data) => {
+      if (err) {
+        res.writeHead(404);
+        return res.end('match_reports.html not found — make sure it is in the same folder as server.js');
       }
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end(data);

@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>USCCS Admin Console — Match Reports</title>
+  <style>
+    :root { --navy: #11213F; --gold: #E7C247; --bg: #F4F6FA; --border: #E1E5EC; --gray: #5A6472; --danger: #C0392B; }
+    body { font-family: -apple-system, sans-serif; background: var(--bg); margin: 0; color: #1a1a1a; }
+    header { background: var(--navy); color: var(--gold); padding: 14px 20px; font-weight: 700; font-size: 17px; display: flex; align-items: center; justify-content: space-between; }
+    header a { color: #6BC4E8; text-decoration: none; font-size: 13px; font-weight: 600; }
+    main { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    .card { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 18px; }
+    .muted { color: var(--gray); font-size: 13px; }
+    .filters { display: flex; flex-wrap: wrap; gap: 14px; align-items: end; }
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    .field label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--gray); }
+    .field select, .field input { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13.5px; min-width: 140px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th { text-align: left; font-size: 11px; text-transform: uppercase; color: var(--gray); padding: 8px; border-bottom: 2px solid var(--border); white-space: nowrap; }
+    td { padding: 8px; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+    .card-count { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 700; margin-left: 4px; }
+    .yc-count { background: #FDF0DD; color: #8A6210; }
+    .rc-count { background: #FBEAE8; color: var(--danger); }
+    .err-box { background: #FBEAE8; color: var(--danger); padding: 10px 14px; border-radius: 6px; margin-top: 10px; font-size: 13px; }
+  </style>
+</head>
+<body>
+<header>
+  USCCS Admin Console — Match Reports
+  <a href="/">← Misconduct Review</a>
+</header>
+<main>
+  <div class="card">
+    <div class="filters">
+      <div class="field">
+        <label for="divisionFilter">Division</label>
+        <select id="divisionFilter" onchange="loadReports()">
+          <option value="">All Divisions</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="teamFilter">Team</label>
+        <select id="teamFilter" onchange="loadReports()">
+          <option value="">All Teams</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="dateFrom">From</label>
+        <input type="date" id="dateFrom" onchange="loadReports()" />
+      </div>
+      <div class="field">
+        <label for="dateTo">To</label>
+        <input type="date" id="dateTo" onchange="loadReports()" />
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="reportsBox"><p class="muted">Loading...</p></div>
+  </div>
+</main>
+<script>
+  async function loadFilterOptions() {
+    const res = await fetch('/api/match-reports/filter-options');
+    const data = await res.json();
+    if (!res.ok) return;
+
+    const divSelect = document.getElementById('divisionFilter');
+    (data.divisions || []).forEach(d => {
+      const opt = document.createElement('option');
+      opt.value = d.division_id;
+      opt.textContent = d.division_id; // raw division ID - no friendly-name lookup table in this app yet
+      divSelect.appendChild(opt);
+    });
+
+    const teamSelect = document.getElementById('teamFilter');
+    (data.teams || []).forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t.team_id;
+      opt.textContent = t.team_name;
+      teamSelect.appendChild(opt);
+    });
+  }
+
+  async function loadReports() {
+    const box = document.getElementById('reportsBox');
+    const params = new URLSearchParams();
+    const division = document.getElementById('divisionFilter').value;
+    const team = document.getElementById('teamFilter').value;
+    const dateFrom = document.getElementById('dateFrom').value;
+    const dateTo = document.getElementById('dateTo').value;
+    if (division) params.set('division', division);
+    if (team) params.set('team', team);
+    if (dateFrom) params.set('dateFrom', dateFrom);
+    if (dateTo) params.set('dateTo', dateTo);
+
+    try {
+      const res = await fetch('/api/match-reports?' + params.toString());
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Unknown error');
+      renderReports(data.reports || []);
+    } catch (e) {
+      box.innerHTML = '<div class="err-box">Failed to load: ' + escapeHtml(e.message) + '</div>';
+    }
+  }
+
+  function renderReports(reports) {
+    const box = document.getElementById('reportsBox');
+    if (!reports.length) {
+      box.innerHTML = '<p class="muted">No submitted match reports match these filters.</p>';
+      return;
+    }
+    box.innerHTML = `
+      <p class="muted" style="margin-top:0;">${reports.length} submitted report(s)</p>
+      <div style="overflow-x:auto;">
+      <table>
+        <thead><tr>
+          <th>Date</th><th>Division</th><th>Team 1</th><th>Score</th><th>Team 2</th><th>Score</th>
+        </tr></thead>
+        <tbody>
+          ${reports.map(r => `
+            <tr>
+              <td>${r.game_date ? new Date(r.game_date).toLocaleDateString() : '—'}</td>
+              <td>${escapeHtml(r.division_id || '')}</td>
+              <td>${escapeHtml(r.team1_name)}
+                <span class="card-count yc-count">${r.team1_yellow_count} YC</span>
+                <span class="card-count rc-count">${r.team1_red_count} RC</span>
+              </td>
+              <td>${r.team1_score}</td>
+              <td>${escapeHtml(r.team2_name)}
+                <span class="card-count yc-count">${r.team2_yellow_count} YC</span>
+                <span class="card-count rc-count">${r.team2_red_count} RC</span>
+              </td>
+              <td>${r.team2_score}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+      </div>
+    `;
+  }
+
+  function escapeHtml(str) {
+    return String(str == null ? '' : str).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  }
+
+  loadFilterOptions();
+  loadReports();
+</script>
+</body>
+</html>
