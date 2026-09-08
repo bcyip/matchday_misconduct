@@ -445,6 +445,7 @@ const server = http.createServer(async (req, res) => {
       const dateFrom = url.searchParams.get('dateFrom');
       const dateTo = url.searchParams.get('dateTo');
       const team = url.searchParams.get('team');
+      const gender = url.searchParams.get('gender');
 
       const conditions = [];
       const params = [];
@@ -452,6 +453,7 @@ const server = http.createServer(async (req, res) => {
       if (dateFrom) { params.push(dateFrom); conditions.push(`mrs.game_date >= $${params.length}`); }
       if (dateTo) { params.push(dateTo); conditions.push(`mrs.game_date <= $${params.length}`); }
       if (team) { params.push(team); conditions.push(`(mrs.team1_id = $${params.length} OR mrs.team2_id = $${params.length})`); }
+      if (gender) { params.push(gender); conditions.push(`mrs.gender = $${params.length}`); }
       const whereClause = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
       const result = await pool.query(`
