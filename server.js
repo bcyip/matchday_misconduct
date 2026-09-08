@@ -586,10 +586,10 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(302, { Location: '/oauth/login' });
       return res.end();
     }
-    fs.readFile(path.join(__dirname, 'match_reports.html'), 'utf8', (err, data) => {
+    fs.readFile(path.join(__dirname, 'match-reports.html'), 'utf8', (err, data) => {
       if (err) {
         res.writeHead(404);
-        return res.end('match_reports.html not found — make sure it is in the same folder as server.js');
+        return res.end('match-reports.html not found — make sure it is in the same folder as server.js');
       }
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end(data);
