@@ -73,7 +73,7 @@
     (data.divisions || []).forEach(d => {
       const opt = document.createElement('option');
       opt.value = d.division_id;
-      opt.textContent = d.division_id; // raw division ID - no friendly-name lookup table in this app yet
+      opt.textContent = d.division_name;
       divSelect.appendChild(opt);
     });
 
@@ -119,23 +119,22 @@
       <div style="overflow-x:auto;">
       <table>
         <thead><tr>
-          <th>Date</th><th>Division</th><th>Team 1</th><th>Score</th><th>Team 2</th><th>Score</th>
+          <th>Date</th><th>Division</th><th style="text-align:right;">Team 1</th><th style="text-align:center;">Score</th><th>Team 2</th>
         </tr></thead>
         <tbody>
           ${reports.map(r => `
             <tr>
               <td>${r.game_date ? new Date(r.game_date).toLocaleDateString() : '—'}</td>
-              <td>${escapeHtml(r.division_id || '')}</td>
-              <td>${escapeHtml(r.team1_name)}
+              <td>${escapeHtml(r.division_name || '')}</td>
+              <td style="text-align:right;">${escapeHtml(r.team1_name)}
                 <span class="card-count yc-count">${r.team1_yellow_count} YC</span>
                 <span class="card-count rc-count">${r.team1_red_count} RC</span>
               </td>
-              <td>${r.team1_score}</td>
+              <td style="text-align:center; font-weight:700; white-space:nowrap;">${r.team1_score} - ${r.team2_score}</td>
               <td>${escapeHtml(r.team2_name)}
                 <span class="card-count yc-count">${r.team2_yellow_count} YC</span>
                 <span class="card-count rc-count">${r.team2_red_count} RC</span>
               </td>
-              <td>${r.team2_score}</td>
             </tr>
           `).join('')}
         </tbody>
