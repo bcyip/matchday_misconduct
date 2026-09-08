@@ -118,11 +118,9 @@
     }
   }
 
-  function cardBadges(yellowCount, redCount) {
-    let html = '';
-    if (yellowCount > 0) html += `<span class="card-count yc-count">${yellowCount} YC</span>`;
-    if (redCount > 0) html += `<span class="card-count rc-count">${redCount} RC</span>`;
-    return html;
+  function cardCount(count, colorClass) {
+    if (!count || count <= 0) return ''; // blank, not "0" - keeps zero-card games uncluttered
+    return `<span class="card-count ${colorClass}">${count}</span>`;
   }
 
   function renderReports(reports) {
@@ -136,7 +134,10 @@
       <div style="overflow-x:auto;">
       <table>
         <thead><tr>
-          <th>Game Date</th><th>Gender</th><th>Division</th><th style="text-align:right;">Team 1</th><th style="text-align:center;">Score</th><th>Team 2</th>
+          <th>Game Date</th><th>Gender</th><th>Division</th>
+          <th style="text-align:right;">Team 1</th><th style="text-align:center;">YC</th><th style="text-align:center;">RC</th>
+          <th style="text-align:center;">Score</th>
+          <th style="text-align:center;">RC</th><th style="text-align:center;">YC</th><th>Team 2</th>
         </tr></thead>
         <tbody>
           ${reports.map(r => `
@@ -144,19 +145,13 @@
               <td>${r.game_date ? new Date(r.game_date).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short' }) + ' ET' : '—'}</td>
               <td>${escapeHtml(r.gender || '')}</td>
               <td>${escapeHtml(r.division_name || '')}</td>
-              <td>
-                <div style="display:flex; align-items:center; justify-content:flex-end; gap:6px; flex-wrap:wrap;">
-                  <span>${escapeHtml(r.team1_name)}</span>
-                  ${cardBadges(r.team1_yellow_count, r.team1_red_count)}
-                </div>
-              </td>
+              <td style="text-align:right;">${escapeHtml(r.team1_name)}</td>
+              <td style="text-align:center;">${cardCount(r.team1_yellow_count, 'yc-count')}</td>
+              <td style="text-align:center;">${cardCount(r.team1_red_count, 'rc-count')}</td>
               <td style="text-align:center; font-weight:700; white-space:nowrap;">${r.team1_score} - ${r.team2_score}</td>
-              <td>
-                <div style="display:flex; align-items:center; justify-content:flex-start; gap:6px; flex-wrap:wrap;">
-                  <span>${escapeHtml(r.team2_name)}</span>
-                  ${cardBadges(r.team2_yellow_count, r.team2_red_count)}
-                </div>
-              </td>
+              <td style="text-align:center;">${cardCount(r.team2_red_count, 'rc-count')}</td>
+              <td style="text-align:center;">${cardCount(r.team2_yellow_count, 'yc-count')}</td>
+              <td>${escapeHtml(r.team2_name)}</td>
             </tr>
           `).join('')}
         </tbody>
