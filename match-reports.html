@@ -20,6 +20,9 @@
     th { text-align: left; font-size: 11px; text-transform: uppercase; color: var(--gray); padding: 8px; border-bottom: 2px solid var(--border); white-space: nowrap; }
     td { padding: 8px; border-bottom: 1px solid var(--border); font-size: 13.5px; }
     .card-count { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 700; margin-left: 4px; }
+    .push-score-btn { padding: 5px 10px; font-size: 11.5px; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--navy); cursor: pointer; white-space: nowrap; }
+    .push-score-btn:hover:not(:disabled) { background: var(--bg); }
+    .push-score-btn:disabled { opacity: .5; cursor: not-allowed; }
     .yc-count { background: #FDF0DD; color: #8A6210; }
     .rc-count { background: #FBEAE8; color: var(--danger); }
     .err-box { background: #FBEAE8; color: var(--danger); padding: 10px 14px; border-radius: 6px; margin-top: 10px; font-size: 13px; }
@@ -137,7 +140,7 @@
           <th>Game Date</th><th>Gender</th><th>Division</th>
           <th style="text-align:right;">Team 1</th><th style="text-align:center;">YC</th><th style="text-align:center;">RC</th>
           <th style="text-align:center;">Score</th>
-          <th style="text-align:center;">RC</th><th style="text-align:center;">YC</th><th>Team 2</th>
+          <th style="text-align:center;">RC</th><th style="text-align:center;">YC</th><th>Team 2</th><th>Actions</th>
         </tr></thead>
         <tbody>
           ${reports.map(r => `
@@ -152,12 +155,54 @@
               <td style="text-align:center;">${cardCount(r.team2_red_count, 'rc-count')}</td>
               <td style="text-align:center;">${cardCount(r.team2_yellow_count, 'yc-count')}</td>
               <td>${escapeHtml(r.team2_name)}</td>
+              <td>
+                <button class="push-score-btn" onclick="pushScore('${escapeJs(r.game_id)}', this)">Push Score to SE</button>
+                <span class="push-score-result" style="display:block; font-size:11px; margin-top:3px;"></span>
+              </td>
             </tr>
           `).join('')}
         </tbody>
       </table>
       </div>
     `;
+  }
+
+  function escapeJs(str) {
+    // Backslash, then single quote (JS string delimiter), then double
+    // quote as an HTML entity (every onclick here sits inside a
+    // double-quoted HTML attribute) - same fix applied to matchday after
+    // a real production crash there, applied here defensively even though
+    // game_id (a UUID) is unlikely to ever contain a quote.
+    return String(str).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+  }
+
+  async function pushScore(gameId, buttonEl) {
+    const resultEl = buttonEl.nextElementSibling;
+    buttonEl.disabled = true;
+    buttonEl.textContent = 'Pushing...';
+    resultEl.textContent = '';
+
+    try {
+      const res = await fetch('/api/match-reports/' + encodeURIComponent(gameId) + '/push-score', { method: 'POST' });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Unknown error');
+
+      if (json.scoreUpdated) {
+        resultEl.textContent = '✓ Pushed successfully';
+        resultEl.style.color = 'var(--success, #1F7A4D)';
+        buttonEl.style.display = 'none';
+      } else {
+        resultEl.textContent = 'Failed: ' + (json.scoreError || 'unknown error');
+        resultEl.style.color = 'var(--danger)';
+        buttonEl.disabled = false;
+        buttonEl.textContent = 'Push Score to SE';
+      }
+    } catch (e) {
+      resultEl.textContent = 'Failed: ' + e.message;
+      resultEl.style.color = 'var(--danger)';
+      buttonEl.disabled = false;
+      buttonEl.textContent = 'Push Score to SE';
+    }
   }
 
   function escapeHtml(str) {

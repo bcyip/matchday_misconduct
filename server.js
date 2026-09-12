@@ -43,6 +43,11 @@ const PORT = process.env.PORT || 8787;
 const SE_CLIENT_ID = process.env.SE_CLIENT_ID;
 const SE_CLIENT_SECRET = process.env.SE_CLIENT_SECRET;
 const SE_ORG_ID = process.env.SE_ORG_ID;
+// The matchday app's own base URL - needed to call ITS retry-score-push
+// endpoint from here, rather than duplicating SportsEngine credentials or
+// GraphQL logic in this app too. Keeps the actual score-push logic living
+// in exactly one place (matchday), which this just calls over HTTP.
+const MATCHDAY_APP_URL = process.env.MATCHDAY_APP_URL;
 const ADMIN_BASE_URL = process.env.ADMIN_BASE_URL;
 const REDIRECT_URI = ADMIN_BASE_URL ? ADMIN_BASE_URL.replace(/\/$/, '') + '/oauth/callback' : null;
 
@@ -491,6 +496,50 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ reports }));
     } catch (err) {
       console.error('[api/match-reports] Error:', err.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  // POST /api/match-reports/:gameId/push-score — calls matchday's OWN
+  // retry-score-push endpoint over HTTP, rather than duplicating
+  // SportsEngine credentials or the GraphQL updateScore logic here too.
+  // Requires MATCHDAY_APP_URL to be configured.
+  const pushScoreMatch = url.pathname.match(/^\/api\/match-reports\/([^/]+)\/push-score$/);
+  if (req.method === 'POST' && pushScoreMatch) {
+    const session = await getSession(cookies.admin_session);
+    if (!session) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Not logged in' }));
+    }
+    if (!MATCHDAY_APP_URL) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'MATCHDAY_APP_URL is not configured on this app.' }));
+    }
+    const gameId = decodeURIComponent(pushScoreMatch[1]);
+    try {
+      const matchdayUrl = new URL('/api/match-report/' + encodeURIComponent(gameId) + '/retry-score-push', MATCHDAY_APP_URL);
+      const result = await new Promise((resolve, reject) => {
+        const req2 = https.request(
+          { hostname: matchdayUrl.hostname, path: matchdayUrl.pathname, method: 'POST' },
+          (res2) => {
+            let data = '';
+            res2.on('data', (chunk) => (data += chunk));
+            res2.on('end', () => {
+              try { resolve(JSON.parse(data)); }
+              catch (e) { reject(new Error('Non-JSON response from matchday: ' + data.slice(0, 200))); }
+            });
+          }
+        );
+        req2.on('error', reject);
+        req2.setTimeout(15000, () => { req2.destroy(); reject(new Error('Timed out waiting for matchday to respond (15s).')); });
+        req2.end();
+      });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(result));
+    } catch (err) {
+      console.error('[api/match-reports push-score] Error:', err.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));
     }
