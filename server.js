@@ -577,7 +577,8 @@ const server = http.createServer(async (req, res) => {
           e.profile_id, e.name, e.event_type, e.minute, e.reason, e.supplemental_report,
           s.game_date,
           r.status, r.committee_notes, r.reviewed_by, r.reviewed_at,
-          sus.games_suspended, sus.standard_games
+          sus.games_suspended, sus.standard_games,
+          NULL AS incident_report
         FROM match_report_entries e
         LEFT JOIN match_report_scores s ON s.game_id = e.game_id
         LEFT JOIN misconduct_reviews r ON r.entry_id = e.id
@@ -586,10 +587,52 @@ const server = http.createServer(async (req, res) => {
         ORDER BY s.game_date DESC NULLS LAST, e.minute DESC NULLS LAST
       `;
 
-      const result = await pool.query(query, params);
+      // Incident reports are a separate, synthetic row type - not from
+      // match_report_entries at all, since they're per-GAME, not tied to
+      // one specific player/team. Shaped to fit the same column structure
+      // as above so the frontend can render both without special-casing.
+      // Only the date filters apply (a report isn't tied to one team or
+      // player), and these always show regardless of the includeYellow
+      // toggle, since a Report is neither a Yellow nor a Red Card.
+      const incidentConditions = ['s.incident_report IS NOT NULL'];
+      const incidentParams = [];
+      let incidentParamIdx = 1;
+      if (dateFrom) { incidentConditions.push(`s.game_date >= $${incidentParamIdx++}`); incidentParams.push(dateFrom); }
+      if (dateTo) { incidentConditions.push(`s.game_date <= $${incidentParamIdx++}`); incidentParams.push(dateTo); }
+
+      const incidentQuery = `
+        SELECT
+          ('incident-' || s.game_id) AS entry_id, s.game_id, NULL AS team_id,
+          (s.team1_name || ' vs ' || s.team2_name) AS team_name, NULL AS person_type,
+          NULL AS profile_id, s.gender AS name, 'Report' AS event_type, NULL AS minute,
+          'Incident Report' AS reason, NULL AS supplemental_report,
+          s.game_date,
+          NULL AS status, NULL AS committee_notes, NULL AS reviewed_by, NULL AS reviewed_at,
+          NULL AS games_suspended, NULL AS standard_games,
+          s.incident_report
+        FROM match_report_scores s
+        WHERE ${incidentConditions.join(' AND ')}
+      `;
+
+      const [result, incidentResult] = await Promise.all([
+        pool.query(query, params),
+        pool.query(incidentQuery, incidentParams),
+      ]);
+      const combinedRows = [...result.rows, ...incidentResult.rows].sort((a, b) => {
+        const dateA = a.game_date ? new Date(a.game_date).getTime() : -Infinity;
+        const dateB = b.game_date ? new Date(b.game_date).getTime() : -Infinity;
+        return dateB - dateA;
+      });
+      const rowsForStatus = combinedRows;
       // No review row yet = implicitly 'pending' - reflect that in the response
       // rather than leaving status as null for the frontend to special-case.
-      const rows = result.rows.map(row => ({ ...row, status: row.status || 'pending' }));
+      // Incident report rows are excluded from this default - they have no
+      // real review workflow, so leaving status null (rather than a
+      // misleading 'pending') lets the frontend render them differently.
+      const rows = rowsForStatus.map(row => ({
+        ...row,
+        status: row.event_type === 'Report' ? row.status : (row.status || 'pending'),
+      }));
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ misconduct: rows }));

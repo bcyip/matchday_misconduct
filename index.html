@@ -177,22 +177,23 @@
 
     tbody.innerHTML = misconductData.map(row => {
       const dateStr = row.game_date ? new Date(row.game_date).toLocaleDateString('en-US', { timeZone: 'America/New_York' }) : '—';
+      const isReport = row.event_type === 'Report';
       const rowHtml = `
-        <tr class="incident-row" onclick="toggleDetail(${row.entry_id})">
+        <tr class="incident-row" onclick="toggleDetail('${row.entry_id}')">
           <td>${dateStr}</td>
           <td>${escapeHtml(row.team_name)}</td>
-          <td>${escapeHtml(row.name)}${row.person_type === 'staff' ? ' <span class="muted">(staff)</span>' : ''}</td>
-          <td>${row.event_type === 'Red Card' ? '🟥' : '🟨'} ${row.event_type}</td>
+          <td>${isReport ? escapeHtml(row.name || '—') : escapeHtml(row.name) + (row.person_type === 'staff' ? ' <span class="muted">(staff)</span>' : '')}</td>
+          <td>${isReport ? '📄 Report' : (row.event_type === 'Red Card' ? '🟥' : '🟨') + ' ' + row.event_type}</td>
           <td>${escapeHtml(row.reason || '—')}</td>
-          <td>${row.minute != null ? row.minute : '—'}</td>
-          <td>${row.event_type === 'Red Card'
+          <td>${isReport ? '—' : (row.minute != null ? row.minute : '—')}</td>
+          <td>${isReport ? '—' : (row.event_type === 'Red Card'
             ? `${row.games_suspended != null ? row.games_suspended : row.standard_games}${row.games_suspended != null && row.games_suspended !== row.standard_games ? ' <span class="muted">(std: ' + row.standard_games + ')</span>' : ''}`
-            : '—'}</td>
-          <td><span class="badge badge-${row.status}">${row.status.replace('_', ' ')}</span></td>
+            : '—')}</td>
+          <td>${isReport ? '' : `<span class="badge badge-${row.status}">${row.status.replace('_', ' ')}</span>`}</td>
         </tr>
       `;
-      const detailHtml = expandedEntryId === row.entry_id
-        ? `<tr><td colspan="8">${renderDetailPanel(row)}</td></tr>`
+      const detailHtml = String(expandedEntryId) === String(row.entry_id)
+        ? `<tr><td colspan="8">${isReport ? renderIncidentReportPanel(row) : renderDetailPanel(row)}</td></tr>`
         : '';
       return rowHtml + detailHtml;
     }).join('');
@@ -201,6 +202,17 @@
   function toggleDetail(entryId) {
     expandedEntryId = expandedEntryId === entryId ? null : entryId;
     renderResults();
+  }
+
+  // Incident reports have no review workflow (no real entry_id tied to
+  // misconduct_reviews/suspensions) - just show the report text, read-only.
+  function renderIncidentReportPanel(row) {
+    return `
+      <div class="detail-panel">
+        <div class="section-label" style="margin-top:0;">Incident Report</div>
+        <p style="white-space:pre-wrap; margin:0;">${escapeHtml(row.incident_report)}</p>
+      </div>
+    `;
   }
 
   function renderDetailPanel(row) {
