@@ -463,7 +463,7 @@ const server = http.createServer(async (req, res) => {
 
       const result = await pool.query(`
         SELECT
-          mrs.game_id, mrs.game_date, mrs.division_id, mrs.gender,
+          mrs.game_id, mrs.game_date, mrs.division_id, mrs.gender, mrs.incident_report,
           mrs.team1_id, mrs.team1_name, mrs.team1_score,
           mrs.team2_id, mrs.team2_name, mrs.team2_score,
           mrs.submitted_at,

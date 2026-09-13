@@ -158,8 +158,17 @@
               <td>
                 <button class="push-score-btn" onclick="pushScore('${escapeJs(r.game_id)}', this)">Push Score to SE</button>
                 <span class="push-score-result" style="display:block; font-size:11px; margin-top:3px;"></span>
+                ${r.incident_report ? `<button class="push-score-btn" style="margin-top:4px;" onclick="toggleIncidentReport('${escapeJs(r.game_id)}')">View Incident Report</button>` : ''}
               </td>
             </tr>
+            ${r.incident_report ? `
+            <tr id="incident-row-${escapeJs(r.game_id)}" style="display:none;">
+              <td colspan="11" style="background:var(--bg); font-size:13px;">
+                <strong>Incident Report:</strong>
+                <div style="white-space:pre-wrap; margin-top:4px;">${escapeHtml(r.incident_report)}</div>
+              </td>
+            </tr>
+            ` : ''}
           `).join('')}
         </tbody>
       </table>
@@ -174,6 +183,11 @@
     // a real production crash there, applied here defensively even though
     // game_id (a UUID) is unlikely to ever contain a quote.
     return String(str).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+  }
+
+  function toggleIncidentReport(gameId) {
+    const row = document.getElementById('incident-row-' + gameId);
+    row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
   }
 
   async function pushScore(gameId, buttonEl) {
