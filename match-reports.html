@@ -13,7 +13,7 @@
     .card { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 18px; }
     .muted { color: var(--gray); font-size: 13px; }
     .filters { display: flex; flex-wrap: wrap; gap: 14px; align-items: end; }
-    .field { display: flex; flex-direction: column; gap: 4px; }
+    .field { display: flex; flex-direction: column; gap: 4px; position: relative; }
     .field label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--gray); }
     .field select, .field input { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13.5px; min-width: 140px; }
     table { width: 100%; border-collapse: collapse; margin-top: 10px; }
@@ -40,10 +40,9 @@
   <div class="card">
     <div class="filters">
       <div class="field">
-        <label for="divisionFilter">Division</label>
-        <select id="divisionFilter" onchange="loadReports()">
-          <option value="">All Divisions</option>
-        </select>
+        <label for="divisionFilterBtn">Division</label>
+        <button type="button" id="divisionFilterBtn" onclick="toggleDivisionDropdown()" style="text-align:left; min-width:140px; padding:8px 10px; border:1px solid var(--border); border-radius:6px; font-size:13.5px; background:#fff; cursor:pointer;">All Divisions</button>
+        <div id="divisionDropdown" style="display:none; position:absolute; z-index:10; background:#fff; border:1px solid var(--border); border-radius:8px; padding:10px; margin-top:4px; max-height:280px; overflow-y:auto; box-shadow:0 4px 12px rgba(0,0,0,0.1);"></div>
       </div>
       <div class="field">
         <label for="teamFilter">Team</label>
@@ -75,18 +74,20 @@
   </div>
 </main>
 <script>
+  let selectedDivisionIds = new Set(); // multi-select state for the division filter
+
   async function loadFilterOptions() {
     const res = await fetch('/api/match-reports/filter-options');
     const data = await res.json();
     if (!res.ok) return;
 
-    const divSelect = document.getElementById('divisionFilter');
-    (data.divisions || []).forEach(d => {
-      const opt = document.createElement('option');
-      opt.value = d.division_id;
-      opt.textContent = d.division_name;
-      divSelect.appendChild(opt);
-    });
+    const dropdown = document.getElementById('divisionDropdown');
+    dropdown.innerHTML = (data.divisions || []).map(d => `
+      <label style="display:flex; align-items:center; gap:6px; padding:4px 2px; font-size:13px; white-space:nowrap; cursor:pointer;">
+        <input type="checkbox" value="${escapeHtml(d.division_id)}" onchange="onDivisionCheckboxChange(this)" />
+        ${escapeHtml(d.division_name)}
+      </label>
+    `).join('');
 
     const teamSelect = document.getElementById('teamFilter');
     (data.teams || []).forEach(t => {
@@ -97,15 +98,40 @@
     });
   }
 
+  function toggleDivisionDropdown() {
+    const dropdown = document.getElementById('divisionDropdown');
+    dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
+  }
+
+  // Close the dropdown when clicking anywhere outside it
+  document.addEventListener('click', (e) => {
+    const dropdown = document.getElementById('divisionDropdown');
+    const btn = document.getElementById('divisionFilterBtn');
+    if (dropdown && !dropdown.contains(e.target) && e.target !== btn) {
+      dropdown.style.display = 'none';
+    }
+  });
+
+  function onDivisionCheckboxChange(checkbox) {
+    if (checkbox.checked) selectedDivisionIds.add(checkbox.value);
+    else selectedDivisionIds.delete(checkbox.value);
+
+    const btn = document.getElementById('divisionFilterBtn');
+    btn.textContent = selectedDivisionIds.size === 0
+      ? 'All Divisions'
+      : selectedDivisionIds.size + ' division' + (selectedDivisionIds.size === 1 ? '' : 's') + ' selected';
+
+    loadReports();
+  }
+
   async function loadReports() {
     const box = document.getElementById('reportsBox');
     const params = new URLSearchParams();
-    const division = document.getElementById('divisionFilter').value;
     const team = document.getElementById('teamFilter').value;
     const gender = document.getElementById('genderFilter').value;
     const dateFrom = document.getElementById('dateFrom').value;
     const dateTo = document.getElementById('dateTo').value;
-    if (division) params.set('division', division);
+    if (selectedDivisionIds.size > 0) params.set('division', [...selectedDivisionIds].join(','));
     if (team) params.set('team', team);
     if (gender) params.set('gender', gender);
     if (dateFrom) params.set('dateFrom', dateFrom);

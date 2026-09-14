@@ -62,8 +62,16 @@
   <div class="card">
     <div class="filters">
       <div class="checkbox-field">
+        <input type="checkbox" id="includeRed" checked onchange="loadMisconduct()" />
+        <label for="includeRed" style="margin:0; text-transform:none; font-weight:400; color:#1a1a1a; font-size:14px;">Red Cards</label>
+      </div>
+      <div class="checkbox-field">
         <input type="checkbox" id="includeYellow" onchange="loadMisconduct()" />
-        <label for="includeYellow" style="margin:0; text-transform:none; font-weight:400; color:#1a1a1a; font-size:14px;">Include Yellow Cards</label>
+        <label for="includeYellow" style="margin:0; text-transform:none; font-weight:400; color:#1a1a1a; font-size:14px;">Yellow Cards</label>
+      </div>
+      <div class="checkbox-field">
+        <input type="checkbox" id="includeIncidentReports" checked onchange="loadMisconduct()" />
+        <label for="includeIncidentReports" style="margin:0; text-transform:none; font-weight:400; color:#1a1a1a; font-size:14px;">Incident Reports</label>
       </div>
       <div class="field">
         <label for="teamFilter">Team</label>
@@ -149,7 +157,9 @@
 
   async function loadMisconduct() {
     const params = new URLSearchParams();
-    if (document.getElementById('includeYellow').checked) params.set('includeYellow', 'true');
+    params.set('includeRed', document.getElementById('includeRed').checked ? 'true' : 'false');
+    params.set('includeYellow', document.getElementById('includeYellow').checked ? 'true' : 'false');
+    params.set('includeIncidentReports', document.getElementById('includeIncidentReports').checked ? 'true' : 'false');
     const teamId = document.getElementById('teamFilter').value;
     if (teamId) params.set('teamId', teamId);
     const playerName = document.getElementById('playerFilter').value.trim();
