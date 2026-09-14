@@ -423,7 +423,8 @@ const server = http.createServer(async (req, res) => {
       const divisions = divisionsResult.rows.map(d => ({
         division_id: d.division_id,
         division_name: (DIVISION_LOOKUP[d.division_id] && DIVISION_LOOKUP[d.division_id].name) || d.division_id,
-      }));
+        gender: (DIVISION_LOOKUP[d.division_id] && DIVISION_LOOKUP[d.division_id].gender) || null,
+      })).sort((a, b) => a.division_name.localeCompare(b.division_name) || (a.gender || '').localeCompare(b.gender || ''));
       res.end(JSON.stringify({ divisions, teams: teamsResult.rows }));
     } catch (err) {
       console.error('[api/match-reports/filter-options] Error:', err.message);
