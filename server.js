@@ -234,15 +234,18 @@ function fetchIdentity(accessToken) {
 }
 
 /**
- * Checks whether the identity response's role_assignments includes the
- * org's "orgAdmin" composite role for our specific SE_ORG_ID. Per the
- * confirmed real response shape, multiple entries share role_key:'orgAdmin'
- * (bundled together) - finding any one of them is sufficient.
+ * Checks whether the identity response's role_assignments includes org
+ * admin access for our specific SE_ORG_ID. SportsEngine's API uses
+ * DIFFERENT fields depending on role_type: a role_type of "SimpleRole"
+ * populates `role` (e.g. "org_admin", snake_case) with `role_key` left
+ * null, while the originally-confirmed shape had `role_key` populated
+ * directly (e.g. "orgAdmin", camelCase) - both are checked here so
+ * either shape is recognized correctly.
  */
 function hasOrgAdminRole(identityResponse) {
   const assignments = identityResponse?.result?.user?.role_assignments || [];
   return assignments.some(
-    (a) => String(a.org_id) === String(SE_ORG_ID) && a.role_key === 'orgAdmin'
+    (a) => String(a.org_id) === String(SE_ORG_ID) && (a.role_key === 'orgAdmin' || a.role === 'org_admin')
   );
 }
 
