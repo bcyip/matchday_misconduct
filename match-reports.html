@@ -46,13 +46,13 @@
       </div>
       <div class="field">
         <label for="teamFilter">Team</label>
-        <select id="teamFilter" onchange="loadReports()">
+        <select id="teamFilter" >
           <option value="">All Teams</option>
         </select>
       </div>
       <div class="field">
         <label for="genderFilter">Gender</label>
-        <select id="genderFilter" onchange="loadReports()">
+        <select id="genderFilter" >
           <option value="">All</option>
           <option value="Men">Men</option>
           <option value="Women">Women</option>
@@ -61,22 +61,37 @@
       <div class="field">
         <label style="visibility:hidden;">.</label>
         <label style="display:flex; align-items:center; gap:6px; font-weight:400; text-transform:none; font-size:13px; padding:8px 0;">
-          <input type="checkbox" id="onlyWithReport" onchange="loadReports()" /> Only show games with a report
+          <input type="checkbox" id="onlyWithReport"  /> Only show games with a report
         </label>
       </div>
       <div class="field">
         <label for="dateFrom">From</label>
-        <input type="date" id="dateFrom" onchange="loadReports()" />
+        <input type="date" id="dateFrom"  />
       </div>
       <div class="field">
         <label for="dateTo">To</label>
-        <input type="date" id="dateTo" onchange="loadReports()" />
+        <input type="date" id="dateTo"  />
+      </div>
+      <div class="field">
+        <label style="visibility:hidden;">.</label>
+        <button type="button" onclick="loadReports()" style="padding:9px 20px; background:var(--navy); color:#fff; border:none; border-radius:6px; font-size:13.5px; font-weight:600; cursor:pointer;">Load Reports</button>
       </div>
     </div>
   </div>
 
+  <div class="card" style="background:#F4F9FD; border-color:#6BC4E8;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;">
+      <div>
+        <strong style="font-size:13.5px;">Historical Games Cache</strong>
+        <p class="muted" style="margin:2px 0 0;">Past games shown above come from a local cache, not a live fetch every time. Click to pull the latest directly from SportsEngine (last 4 days by default).</p>
+      </div>
+      <button type="button" onclick="syncSchedule()" id="syncBtn" class="push-score-btn" style="white-space:nowrap;">Sync Historical Games</button>
+    </div>
+    <div id="syncResult" style="margin-top:8px; font-size:13px;"></div>
+  </div>
+
   <div class="card">
-    <div id="reportsBox"><p class="muted">Loading...</p></div>
+    <div id="reportsBox"><p class="muted">Set your filters and click "Load Reports" below.</p></div>
   </div>
 </main>
 <script>
@@ -126,8 +141,32 @@
     btn.textContent = selectedDivisionIds.size === 0
       ? 'All Divisions'
       : selectedDivisionIds.size + ' division' + (selectedDivisionIds.size === 1 ? '' : 's') + ' selected';
+  }
 
-    loadReports();
+  async function syncSchedule() {
+    const btn = document.getElementById('syncBtn');
+    const resultEl = document.getElementById('syncResult');
+    const dateFrom = document.getElementById('dateFrom').value;
+    const dateTo = document.getElementById('dateTo').value;
+
+    btn.disabled = true;
+    btn.textContent = 'Syncing...';
+    resultEl.innerHTML = '';
+    try {
+      const res = await fetch('/api/match-reports/sync-schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dateFrom: dateFrom || undefined, dateTo: dateTo || undefined }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Unknown error');
+      resultEl.innerHTML = `<span style="color:var(--success, #1F7A4D);">Synced ${data.syncedCount} game(s).</span>`;
+    } catch (e) {
+      resultEl.innerHTML = '<span style="color:var(--danger);">Sync failed: ' + escapeHtml(e.message) + '</span>';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Sync Historical Games';
+    }
   }
 
   async function loadReports() {
@@ -310,7 +349,6 @@
   }
 
   loadFilterOptions();
-  loadReports();
 </script>
 </body>
 </html>

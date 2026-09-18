@@ -42,16 +42,19 @@ const { Pool } = require('pg');
 const PORT = process.env.PORT || 8787;
 const SE_CLIENT_ID = process.env.SE_CLIENT_ID;
 const SE_CLIENT_SECRET = process.env.SE_CLIENT_SECRET;
+// Separate, dedicated refresh token for this app's OWN direct SportsEngine
+// data queries (fetching past games for the schedule cache below) - NOT
+// the same token used by matchday or the schedule monitor. Per this
+// project's established rule, an SE_REFRESH_TOKEN is never reused across
+// apps. SE_CLIENT_ID/SE_CLIENT_SECRET above are still shared (same app
+// registration), only the refresh token itself is unique to this app.
+const SE_DATA_REFRESH_TOKEN = process.env.SE_DATA_REFRESH_TOKEN;
 const SE_ORG_ID = process.env.SE_ORG_ID;
 // The matchday app's own base URL - needed to call ITS retry-score-push
 // endpoint from here, rather than duplicating SportsEngine credentials or
 // GraphQL logic in this app too. Keeps the actual score-push logic living
 // in exactly one place (matchday), which this just calls over HTTP.
 const MATCHDAY_APP_URL = process.env.MATCHDAY_APP_URL;
-// The schedule monitor's own base URL - needed to call ITS /api/schedule
-// endpoint from here, same cross-app HTTP pattern as MATCHDAY_APP_URL
-// above, rather than a direct connection to its separate database.
-const SCHEDULE_MONITOR_APP_URL = process.env.SCHEDULE_MONITOR_APP_URL;
 const ADMIN_BASE_URL = process.env.ADMIN_BASE_URL;
 const REDIRECT_URI = ADMIN_BASE_URL ? ADMIN_BASE_URL.replace(/\/$/, '') + '/oauth/callback' : null;
 
@@ -275,7 +278,204 @@ async function destroySession(sessionId) {
   await pool.query('DELETE FROM admin_sessions WHERE session_id = $1', [sessionId]);
 }
 
-// ---------- Server ----------
+// ---------- SportsEngine data fetching (this app's OWN direct queries -
+// separate from the SSO login flow above, and from the schedule monitor)
+// ----------
+
+let seDataTokenCache = { accessToken: null, expiresAt: 0 };
+
+function refreshSeDataAccessToken() {
+  return new Promise((resolve, reject) => {
+    if (!SE_CLIENT_ID || !SE_CLIENT_SECRET || !SE_DATA_REFRESH_TOKEN) {
+      return reject(new Error('Missing SE_CLIENT_ID / SE_CLIENT_SECRET / SE_DATA_REFRESH_TOKEN environment variables.'));
+    }
+    const body = JSON.stringify({
+      client_id: SE_CLIENT_ID,
+      client_secret: SE_CLIENT_SECRET,
+      refresh_token: SE_DATA_REFRESH_TOKEN,
+      grant_type: 'refresh_token',
+    });
+    const req = https.request(
+      {
+        hostname: 'user.sportsengine.com',
+        path: '/oauth/token',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (chunk) => (data += chunk));
+        res.on('end', () => {
+          try {
+            const json = JSON.parse(data);
+            if (!json.access_token) return reject(new Error('Token refresh failed: ' + data));
+            seDataTokenCache.accessToken = json.access_token;
+            seDataTokenCache.expiresAt = Date.now() + (json.expires_in || 1800) * 1000 - 60000;
+            resolve(seDataTokenCache.accessToken);
+          } catch (e) {
+            reject(new Error('Could not parse token response: ' + data));
+          }
+        });
+      }
+    );
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+async function getValidSeDataAccessToken() {
+  if (seDataTokenCache.accessToken && Date.now() < seDataTokenCache.expiresAt) return seDataTokenCache.accessToken;
+  return refreshSeDataAccessToken();
+}
+
+async function callSeGraphQL(query, variables) {
+  const token = await getValidSeDataAccessToken();
+  const body = JSON.stringify({ query, variables });
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: 'api.sportsengine.com',
+        path: '/graphql',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), Authorization: 'Bearer ' + token },
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (chunk) => (data += chunk));
+        res.on('end', () => {
+          try {
+            const json = JSON.parse(data);
+            if (json.errors) return reject(new Error('GraphQL error: ' + JSON.stringify(json.errors)));
+            resolve(json.data);
+          } catch (e) {
+            reject(new Error('Non-JSON response from SportsEngine: ' + data.slice(0, 300)));
+          }
+        });
+      }
+    );
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+function seSleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Same retry/backoff shape as the schedule monitor's proven implementation
+// - a 4-day past-games window is small, but transient 502s/rate limits can
+// still hit any individual page fetch.
+async function callSeGraphQLWithRetry(query, variables, maxAttempts = 3) {
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await callSeGraphQL(query, variables);
+    } catch (err) {
+      lastError = err;
+      console.warn(`[sync-schedule] Page fetch attempt ${attempt}/${maxAttempts} failed: ${err.message}`);
+      if (attempt < maxAttempts) {
+        const isRateLimit = /rate limit|too many requests/i.test(err.message);
+        const backoffMs = isRateLimit ? attempt * 20000 : attempt * 3000;
+        await seSleep(backoffMs);
+      }
+    }
+  }
+  throw lastError;
+}
+
+const SE_EVENTS_QUERY = `
+  query Events($orgId: Int!, $from: UTCDateTime!, $to: UTCDateTime!, $page: Int!, $perPage: Int!) {
+    events(organizationId: $orgId, from: $from, to: $to, calendarEventType: GAME, page: $page, perPage: $perPage) {
+      results {
+        id
+        eventTeams { name team { id program { primaryName } divisionId } homeTeam }
+        start
+        subvenue { name venueId venueName }
+        subvenueId
+        updated
+        created
+        gameStatus
+      }
+      pageInformation { count page pages }
+    }
+  }`;
+
+function deriveGenderFromProgramName(primaryName) {
+  if (!primaryName) return null;
+  const lower = primaryName.toLowerCase();
+  if (lower.includes('women')) return 'Women';
+  if (lower.includes('men')) return 'Men';
+  return null;
+}
+
+function extractGameInfo(event) {
+  const teams = event.eventTeams || [];
+  const home = teams.find((t) => t.homeTeam === true);
+  const away = teams.find((t) => t.homeTeam === false);
+  const subvenue = event.subvenue || {};
+  const locationName = [subvenue.venueName, subvenue.name].filter(Boolean).join(' - ') || null;
+
+  const divisionId = (home && home.team && home.team.divisionId) || (away && away.team && away.team.divisionId) || null;
+  const divisionInfo = divisionId ? DIVISION_LOOKUP[divisionId] : null;
+
+  const programName = (home && home.team && home.team.program && home.team.program.primaryName)
+    || (away && away.team && away.team.program && away.team.program.primaryName) || null;
+  const gender = deriveGenderFromProgramName(programName) || (divisionInfo && divisionInfo.gender) || null;
+
+  return {
+    eventId: event.id,
+    startTime: event.start || null,
+    locationName,
+    homeTeam: (home && home.name) || null,
+    awayTeam: (away && away.name) || null,
+    homeTeamId: (home && home.team && home.team.id) || null,
+    awayTeamId: (away && away.team && away.team.id) || null,
+    divisionId,
+    divisionName: (divisionInfo && divisionInfo.name) || null,
+    gender,
+    gameStatus: event.gameStatus || null,
+  };
+}
+
+/**
+ * Fetches games directly from SportsEngine for the given range, paginated.
+ * Deliberately simpler than the schedule monitor's fetchFullSchedule - this
+ * app only ever fetches a short PAST window (default 4 days), so there's
+ * no season-long pagination concern, but the same retry/dedup safeguards
+ * are kept since any individual page can still hit a transient failure.
+ */
+async function fetchGamesInRange(from, to) {
+  let allEvents = [];
+  let page = 1;
+  let totalPages = 1;
+  const PER_PAGE = 40; // same conservative value as the schedule monitor - 100/page hits SportsEngine's complexity limit
+  const PAGE_DELAY_MS = 1500;
+
+  do {
+    const data = await callSeGraphQLWithRetry(SE_EVENTS_QUERY, { orgId: parseInt(SE_ORG_ID, 10), from, to, page, perPage: PER_PAGE });
+    const pageResults = (data.events && data.events.results) || [];
+    allEvents = allEvents.concat(pageResults);
+    totalPages = (data.events && data.events.pageInformation && data.events.pageInformation.pages) || 1;
+    page++;
+    if (page <= totalPages) await seSleep(PAGE_DELAY_MS);
+  } while (page <= totalPages);
+
+  // Dedup by event ID - same pagination-drift safeguard used elsewhere in
+  // this project.
+  const seenIds = new Set();
+  const deduped = [];
+  for (const event of allEvents) {
+    if (seenIds.has(event.id)) continue;
+    seenIds.add(event.id);
+    deduped.push(event);
+  }
+
+  return deduped.map(extractGameInfo);
+}
+
+
 
 const HTML_FILE = path.join(__dirname, 'index.html');
 
@@ -439,14 +639,77 @@ const server = http.createServer(async (req, res) => {
   }
 
   // GET /api/match-reports?division=&dateFrom=&dateTo=&team=&gender= —
-  // unified list of PAST games: pulls the live schedule from the schedule
-  // monitor (cross-app HTTP call, same pattern as push-score - keeps the
-  // two apps' databases decoupled) and merges in our own submitted report
-  // data where it exists. A game with no report yet still appears, with
-  // score/YC/RC/incident_report left blank - this is deliberately the ONE
-  // view for this page now, not a separate toggle (see conversation).
-  // Falls back to report-only data (old behavior) if SCHEDULE_MONITOR_APP_URL
-  // isn't configured, rather than hard-failing the whole page.
+  // unified list of PAST games: reads from our own local
+  // schedule_games_cache (populated only by the explicit "Sync Historical
+  // Games" button below, never automatically) and merges in our own
+  // submitted report data where it exists. A game with no report yet
+  // still appears, with score/YC/RC/incident_report left blank - this is
+  // deliberately the ONE view for this page now, not a separate toggle
+  // (see conversation).
+  // POST /api/match-reports/sync-schedule — fetches PAST games directly
+  // from SportsEngine (this app's own credentials, decoupled from the
+  // schedule monitor entirely) and upserts them into our local cache, so
+  // the main list below can read from our own database instead of a live
+  // fetch on every load. Only runs when this button is explicitly
+  // clicked - never automatically, and never as a side effect of the
+  // schedule monitor's own separate polling.
+  if (req.method === 'POST' && url.pathname === '/api/match-reports/sync-schedule') {
+    const session = await getSession(cookies.admin_session);
+    if (!session) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Not logged in' }));
+    }
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', async () => {
+      let payload = {};
+      try {
+        if (body) payload = JSON.parse(body);
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'Invalid JSON body' }));
+      }
+      try {
+        const now = new Date();
+        // Default: last 4 days, as specifically requested - a deliberate,
+        // manually-triggered sync, not a wide historical backfill.
+        const defaultFrom = new Date(now.getTime() - 4 * 24 * 60 * 60 * 1000);
+        const rangeFrom = payload.dateFrom ? new Date(payload.dateFrom) : defaultFrom;
+        const rangeToRaw = payload.dateTo ? new Date(payload.dateTo + 'T23:59:59') : now;
+        const rangeTo = rangeToRaw < now ? rangeToRaw : now; // never sync future games
+
+        const games = await fetchGamesInRange(rangeFrom.toISOString(), rangeTo.toISOString());
+
+        // Only past games get cached, even if the requested range somehow
+        // included later dates - this cache is specifically for history.
+        const pastGames = games.filter(g => g.startTime && new Date(g.startTime) <= now);
+
+        let syncedCount = 0;
+        for (const g of pastGames) {
+          await pool.query(
+            `INSERT INTO schedule_games_cache (game_id, start_time, division_id, gender, location_name, home_team, home_team_id, away_team, away_team_id, game_status, synced_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+             ON CONFLICT (game_id) DO UPDATE SET
+               start_time = EXCLUDED.start_time, division_id = EXCLUDED.division_id, gender = EXCLUDED.gender,
+               location_name = EXCLUDED.location_name, home_team = EXCLUDED.home_team, home_team_id = EXCLUDED.home_team_id,
+               away_team = EXCLUDED.away_team, away_team_id = EXCLUDED.away_team_id, game_status = EXCLUDED.game_status,
+               synced_at = now()`,
+            [g.eventId, g.startTime, g.divisionId, g.gender, g.locationName, g.homeTeam, g.homeTeamId, g.awayTeam, g.awayTeamId, g.gameStatus]
+          );
+          syncedCount++;
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, syncedCount, rangeFrom: rangeFrom.toISOString(), rangeTo: rangeTo.toISOString() }));
+      } catch (err) {
+        console.error('[api/match-reports sync-schedule] Error:', err.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/match-reports') {
     const session = await getSession(cookies.admin_session);
     if (!session) {
@@ -511,69 +774,47 @@ const server = http.createServer(async (req, res) => {
 
       let mergedRows;
 
-      if (!SCHEDULE_MONITOR_APP_URL) {
-        // Fallback: schedule monitor not configured - just show submitted
-        // reports, same as the original behavior, rather than hard-failing.
-        mergedRows = reportResult.rows;
-      } else {
-        const scheduleUrl = new URL('/api/schedule', SCHEDULE_MONITOR_APP_URL);
-        scheduleUrl.searchParams.set('from', rangeFrom.toISOString());
-        scheduleUrl.searchParams.set('to', rangeTo.toISOString());
+      // Read from our own local cache instead of live-fetching the
+      // schedule monitor on every load - the cache is only ever populated
+      // by the explicit "Sync Historical Games" button (see sync-schedule
+      // endpoint above), never automatically here.
+      const cacheResult = await pool.query(
+        'SELECT * FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2',
+        [rangeFrom.toISOString(), rangeTo.toISOString()]
+      );
 
-        const scheduleData = await new Promise((resolve, reject) => {
-          const req2 = https.request(
-            { hostname: scheduleUrl.hostname, path: scheduleUrl.pathname + scheduleUrl.search, method: 'GET' },
-            (res2) => {
-              let data = '';
-              res2.on('data', (chunk) => (data += chunk));
-              res2.on('end', () => {
-                try { resolve(JSON.parse(data)); }
-                catch (e) { reject(new Error('Non-JSON response from schedule monitor: ' + data.slice(0, 200))); }
-              });
-            }
-          );
-          req2.on('error', reject);
-          req2.setTimeout(20000, () => { req2.destroy(); reject(new Error('Timed out waiting for schedule monitor to respond (20s).')); });
-          req2.end();
-        });
+      mergedRows = cacheResult.rows.map(g => {
+        const existing = reportByGameId.get(g.game_id);
+        if (existing) return existing; // real submitted report - use it as-is
 
-        if (!Array.isArray(scheduleData.games)) {
-          throw new Error(scheduleData.error || 'Unexpected response shape from schedule monitor.');
-        }
+        // No report yet - build a stub row from cached schedule data, with
+        // score/YC/RC/incident_report all left blank (null).
+        return {
+          game_id: g.game_id,
+          game_date: g.start_time,
+          division_id: g.division_id,
+          gender: g.gender,
+          incident_report: null,
+          team1_id: g.home_team_id,
+          team1_name: g.home_team,
+          team1_score: null,
+          team2_id: g.away_team_id,
+          team2_name: g.away_team,
+          team2_score: null,
+          submitted_at: null,
+          team1_yellow_count: null,
+          team1_red_count: null,
+          team2_yellow_count: null,
+          team2_red_count: null,
+        };
+      });
 
-        mergedRows = scheduleData.games.map(g => {
-          const existing = reportByGameId.get(g.eventId);
-          if (existing) return existing; // real submitted report - use it as-is
-
-          // No report yet - build a stub row from schedule data, with
-          // score/YC/RC/incident_report all left blank (null).
-          return {
-            game_id: g.eventId,
-            game_date: g.startTime,
-            division_id: g.divisionId,
-            gender: g.gender,
-            incident_report: null,
-            team1_id: g.homeTeamId,
-            team1_name: g.homeTeam,
-            team1_score: null,
-            team2_id: g.awayTeamId,
-            team2_name: g.awayTeam,
-            team2_score: null,
-            submitted_at: null,
-            team1_yellow_count: null,
-            team1_red_count: null,
-            team2_yellow_count: null,
-            team2_red_count: null,
-          };
-        });
-
-        // Any report whose game_id didn't come back from the schedule call
-        // (e.g. a game outside the fetched range, or a schedule-monitor
-        // edge case) still gets included - never silently drop a real report.
-        const mergedIds = new Set(mergedRows.map(r => r.game_id));
-        for (const r of reportResult.rows) {
-          if (!mergedIds.has(r.game_id)) mergedRows.push(r);
-        }
+      // Any report whose game_id isn't in the cache yet (e.g. a game
+      // outside the synced range) still gets included - never silently
+      // drop a real report just because its schedule entry isn't cached.
+      const mergedIds = new Set(mergedRows.map(r => r.game_id));
+      for (const r of reportResult.rows) {
+        if (!mergedIds.has(r.game_id)) mergedRows.push(r);
       }
 
       // Apply the same filters to the merged set, regardless of whether a
