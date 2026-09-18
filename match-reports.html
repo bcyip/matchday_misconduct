@@ -173,7 +173,7 @@
           ${reports.map(r => {
             const hasReport = r.team1_score != null || r.team2_score != null;
             return `
-            <tr${!hasReport ? ' style="background:#FBEAE8;"' : ''}>
+            <tr${!hasReport ? (r.flagged_external ? ' style="background:#FDF0DD;"' : ' style="background:#FBEAE8;"') : ''}>
               <td>${r.game_date ? new Date(r.game_date).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short' }) + ' ET' : '—'}</td>
               <td>${escapeHtml(r.gender || '')}</td>
               <td>${escapeHtml(r.division_name || '')}</td>
@@ -189,7 +189,13 @@
                   <button class="push-score-btn" onclick="pushScore('${escapeJs(r.game_id)}', this)">Push Score to SE</button>
                   <span class="push-score-result" style="display:block; font-size:11px; margin-top:3px;"></span>
                   ${r.incident_report ? `<button class="push-score-btn" style="margin-top:4px;" onclick="toggleIncidentReport('${escapeJs(r.game_id)}')">View Incident Report</button>` : ''}
-                ` : '<span class="muted" style="font-size:12px;">No report yet</span>'}
+                ` : `
+                  <span class="muted" style="font-size:12px; display:block;">No report yet</span>
+                  <label style="display:flex; align-items:center; gap:5px; font-size:11.5px; font-weight:400; margin-top:4px; cursor:pointer;">
+                    <input type="checkbox" ${r.flagged_external ? 'checked' : ''} onchange="toggleExternalFlag('${escapeJs(r.game_id)}', this.checked)" />
+                    Received elsewhere - needs entry
+                  </label>
+                `}
               </td>
             </tr>
             ${r.incident_report ? `
@@ -215,6 +221,21 @@
     // a real production crash there, applied here defensively even though
     // game_id (a UUID) is unlikely to ever contain a quote.
     return String(str).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+  }
+
+  async function toggleExternalFlag(gameId, flagged) {
+    try {
+      const res = await fetch('/api/match-reports/' + encodeURIComponent(gameId) + '/flag-external', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ flagged }),
+      });
+      if (!res.ok) throw new Error('Failed to save');
+      loadReports(); // reload so the row's highlight color updates too
+    } catch (e) {
+      alert('Failed to update: ' + e.message);
+      loadReports(); // reload to reflect the actual (unchanged) state
+    }
   }
 
   function toggleIncidentReport(gameId) {

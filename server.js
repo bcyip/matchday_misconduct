@@ -501,6 +501,9 @@ const server = http.createServer(async (req, res) => {
       `, reportParams);
       const reportByGameId = new Map(reportResult.rows.map(r => [r.game_id, r]));
 
+      const flaggedResult = await pool.query('SELECT game_id FROM external_report_flags');
+      const flaggedIds = new Set(flaggedResult.rows.map(r => r.game_id));
+
       let mergedRows;
 
       if (!SCHEDULE_MONITOR_APP_URL) {
@@ -583,6 +586,7 @@ const server = http.createServer(async (req, res) => {
       const reports = mergedRows.map(r => ({
         ...r,
         division_name: r.division_id ? ((DIVISION_LOOKUP[r.division_id] && DIVISION_LOOKUP[r.division_id].name) || r.division_id) : null,
+        flagged_external: flaggedIds.has(r.game_id),
       }));
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -599,6 +603,49 @@ const server = http.createServer(async (req, res) => {
   // retry-score-push endpoint over HTTP, rather than duplicating
   // SportsEngine credentials or the GraphQL updateScore logic here too.
   // Requires MATCHDAY_APP_URL to be configured.
+  // POST /api/match-reports/:gameId/flag-external — toggle whether a
+  // report is known to have been received through some OTHER system, but
+  // not yet entered here. Body: { flagged: true|false }.
+  const flagExternalMatch = url.pathname.match(/^\/api\/match-reports\/([^/]+)\/flag-external$/);
+  if (req.method === 'POST' && flagExternalMatch) {
+    const session = await getSession(cookies.admin_session);
+    if (!session) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Not logged in' }));
+    }
+    const gameId = decodeURIComponent(flagExternalMatch[1]);
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', async () => {
+      let payload;
+      try {
+        payload = JSON.parse(body);
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'Invalid JSON body' }));
+      }
+      try {
+        if (payload.flagged) {
+          await pool.query(
+            `INSERT INTO external_report_flags (game_id, flagged_by)
+             VALUES ($1, $2)
+             ON CONFLICT (game_id) DO NOTHING`,
+            [gameId, session.name || null]
+          );
+        } else {
+          await pool.query('DELETE FROM external_report_flags WHERE game_id = $1', [gameId]);
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      } catch (err) {
+        console.error('[api/match-reports flag-external] Error:', err.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
   const pushScoreMatch = url.pathname.match(/^\/api\/match-reports\/([^/]+)\/push-score$/);
   if (req.method === 'POST' && pushScoreMatch) {
     const session = await getSession(cookies.admin_session);
