@@ -155,11 +155,12 @@
   function renderReports(reports) {
     const box = document.getElementById('reportsBox');
     if (!reports.length) {
-      box.innerHTML = '<p class="muted">No submitted match reports match these filters.</p>';
+      box.innerHTML = '<p class="muted">No games match these filters.</p>';
       return;
     }
+    const missingCount = reports.filter(r => r.team1_score == null && r.team2_score == null).length;
     box.innerHTML = `
-      <p class="muted" style="margin-top:0;">${reports.length} submitted report(s)</p>
+      <p class="muted" style="margin-top:0;">${reports.length} game(s)${missingCount > 0 ? ' - ' + missingCount + ' missing a report' : ''}</p>
       <div style="overflow-x:auto;">
       <table>
         <thead><tr>
@@ -169,22 +170,26 @@
           <th style="text-align:center;">RC</th><th style="text-align:center;">YC</th><th>Team 2</th><th>Actions</th>
         </tr></thead>
         <tbody>
-          ${reports.map(r => `
-            <tr>
+          ${reports.map(r => {
+            const hasReport = r.team1_score != null || r.team2_score != null;
+            return `
+            <tr${!hasReport ? ' style="background:#FBEAE8;"' : ''}>
               <td>${r.game_date ? new Date(r.game_date).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short' }) + ' ET' : '—'}</td>
               <td>${escapeHtml(r.gender || '')}</td>
               <td>${escapeHtml(r.division_name || '')}</td>
               <td style="text-align:right;">${escapeHtml(r.team1_name)}</td>
               <td style="text-align:center;">${cardCount(r.team1_yellow_count, 'yc-count')}</td>
               <td style="text-align:center;">${cardCount(r.team1_red_count, 'rc-count')}</td>
-              <td style="text-align:center; font-weight:700; white-space:nowrap;">${r.team1_score} - ${r.team2_score}</td>
+              <td style="text-align:center; font-weight:700; white-space:nowrap;">${hasReport ? r.team1_score + ' - ' + r.team2_score : '—'}</td>
               <td style="text-align:center;">${cardCount(r.team2_red_count, 'rc-count')}</td>
               <td style="text-align:center;">${cardCount(r.team2_yellow_count, 'yc-count')}</td>
               <td>${escapeHtml(r.team2_name)}</td>
               <td>
-                <button class="push-score-btn" onclick="pushScore('${escapeJs(r.game_id)}', this)">Push Score to SE</button>
-                <span class="push-score-result" style="display:block; font-size:11px; margin-top:3px;"></span>
-                ${r.incident_report ? `<button class="push-score-btn" style="margin-top:4px;" onclick="toggleIncidentReport('${escapeJs(r.game_id)}')">View Incident Report</button>` : ''}
+                ${hasReport ? `
+                  <button class="push-score-btn" onclick="pushScore('${escapeJs(r.game_id)}', this)">Push Score to SE</button>
+                  <span class="push-score-result" style="display:block; font-size:11px; margin-top:3px;"></span>
+                  ${r.incident_report ? `<button class="push-score-btn" style="margin-top:4px;" onclick="toggleIncidentReport('${escapeJs(r.game_id)}')">View Incident Report</button>` : ''}
+                ` : '<span class="muted" style="font-size:12px;">No report yet</span>'}
               </td>
             </tr>
             ${r.incident_report ? `
@@ -195,7 +200,8 @@
               </td>
             </tr>
             ` : ''}
-          `).join('')}
+          `;
+          }).join('')}
         </tbody>
       </table>
       </div>

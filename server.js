@@ -48,6 +48,10 @@ const SE_ORG_ID = process.env.SE_ORG_ID;
 // GraphQL logic in this app too. Keeps the actual score-push logic living
 // in exactly one place (matchday), which this just calls over HTTP.
 const MATCHDAY_APP_URL = process.env.MATCHDAY_APP_URL;
+// The schedule monitor's own base URL - needed to call ITS /api/schedule
+// endpoint from here, same cross-app HTTP pattern as MATCHDAY_APP_URL
+// above, rather than a direct connection to its separate database.
+const SCHEDULE_MONITOR_APP_URL = process.env.SCHEDULE_MONITOR_APP_URL;
 const ADMIN_BASE_URL = process.env.ADMIN_BASE_URL;
 const REDIRECT_URI = ADMIN_BASE_URL ? ADMIN_BASE_URL.replace(/\/$/, '') + '/oauth/callback' : null;
 
@@ -434,12 +438,15 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // GET /api/match-reports?division=&dateFrom=&dateTo=&team= — running list
-  // of every submitted match report, with per-team score and Yellow/Red
-  // Card totals aggregated from match_report_entries. This deliberately
-  // only lists reports that HAVE been submitted (a simple running list) -
-  // it does NOT cross-reference the full schedule to find games missing a
-  // report, which would need a second data source (see conversation).
+  // GET /api/match-reports?division=&dateFrom=&dateTo=&team=&gender= —
+  // unified list of PAST games: pulls the live schedule from the schedule
+  // monitor (cross-app HTTP call, same pattern as push-score - keeps the
+  // two apps' databases decoupled) and merges in our own submitted report
+  // data where it exists. A game with no report yet still appears, with
+  // score/YC/RC/incident_report left blank - this is deliberately the ONE
+  // view for this page now, not a separate toggle (see conversation).
+  // Falls back to report-only data (old behavior) if SCHEDULE_MONITOR_APP_URL
+  // isn't configured, rather than hard-failing the whole page.
   if (req.method === 'GET' && url.pathname === '/api/match-reports') {
     const session = await getSession(cookies.admin_session);
     if (!session) {
@@ -449,21 +456,25 @@ const server = http.createServer(async (req, res) => {
     try {
       const divisionParam = url.searchParams.get('division');
       const divisions = divisionParam ? divisionParam.split(',').filter(Boolean) : [];
-      const dateFrom = url.searchParams.get('dateFrom');
-      const dateTo = url.searchParams.get('dateTo');
       const team = url.searchParams.get('team');
       const gender = url.searchParams.get('gender');
+      const dateFromParam = url.searchParams.get('dateFrom');
+      const dateToParam = url.searchParams.get('dateTo');
 
-      const conditions = [];
-      const params = [];
-      if (divisions.length > 0) { params.push(divisions); conditions.push(`mrs.division_id = ANY($${params.length})`); }
-      if (dateFrom) { params.push(dateFrom); conditions.push(`mrs.game_date >= $${params.length}`); }
-      if (dateTo) { params.push(dateTo); conditions.push(`mrs.game_date <= $${params.length}`); }
-      if (team) { params.push(team); conditions.push(`(mrs.team1_id = $${params.length} OR mrs.team2_id = $${params.length})`); }
-      if (gender) { params.push(gender); conditions.push(`mrs.gender = $${params.length}`); }
-      const whereClause = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+      // Default to the last 30 days through now if no range given - a
+      // full-season fetch on every page load would be needlessly heavy.
+      const now = new Date();
+      const defaultFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      const rangeFrom = dateFromParam ? new Date(dateFromParam) : defaultFrom;
+      // Never look past right now - this view is specifically PAST games.
+      const rangeToRaw = dateToParam ? new Date(dateToParam + 'T23:59:59') : now;
+      const rangeTo = rangeToRaw < now ? rangeToRaw : now;
 
-      const result = await pool.query(`
+      // Existing submitted-report data for this range, keyed by game_id
+      // for easy merging below. Same query/shape as before.
+      const reportConditions = ['mrs.game_date >= $1', 'mrs.game_date <= $2'];
+      const reportParams = [rangeFrom.toISOString(), rangeTo.toISOString()];
+      const reportResult = await pool.query(`
         SELECT
           mrs.game_id, mrs.game_date, mrs.division_id, mrs.gender, mrs.incident_report,
           mrs.team1_id, mrs.team1_name, mrs.team1_score,
@@ -486,15 +497,95 @@ const server = http.createServer(async (req, res) => {
             COUNT(*) FILTER (WHERE event_type = 'Red Card') AS red_count
           FROM match_report_entries GROUP BY game_id, team_id
         ) t2 ON t2.game_id = mrs.game_id AND t2.team_id = mrs.team2_id
-        ${whereClause}
-        ORDER BY mrs.game_date DESC NULLS LAST, mrs.submitted_at DESC
-      `, params);
+        WHERE ${reportConditions.join(' AND ')}
+      `, reportParams);
+      const reportByGameId = new Map(reportResult.rows.map(r => [r.game_id, r]));
 
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      const reports = result.rows.map(r => ({
+      let mergedRows;
+
+      if (!SCHEDULE_MONITOR_APP_URL) {
+        // Fallback: schedule monitor not configured - just show submitted
+        // reports, same as the original behavior, rather than hard-failing.
+        mergedRows = reportResult.rows;
+      } else {
+        const scheduleUrl = new URL('/api/schedule', SCHEDULE_MONITOR_APP_URL);
+        scheduleUrl.searchParams.set('from', rangeFrom.toISOString());
+        scheduleUrl.searchParams.set('to', rangeTo.toISOString());
+
+        const scheduleData = await new Promise((resolve, reject) => {
+          const req2 = https.request(
+            { hostname: scheduleUrl.hostname, path: scheduleUrl.pathname + scheduleUrl.search, method: 'GET' },
+            (res2) => {
+              let data = '';
+              res2.on('data', (chunk) => (data += chunk));
+              res2.on('end', () => {
+                try { resolve(JSON.parse(data)); }
+                catch (e) { reject(new Error('Non-JSON response from schedule monitor: ' + data.slice(0, 200))); }
+              });
+            }
+          );
+          req2.on('error', reject);
+          req2.setTimeout(20000, () => { req2.destroy(); reject(new Error('Timed out waiting for schedule monitor to respond (20s).')); });
+          req2.end();
+        });
+
+        if (!Array.isArray(scheduleData.games)) {
+          throw new Error(scheduleData.error || 'Unexpected response shape from schedule monitor.');
+        }
+
+        mergedRows = scheduleData.games.map(g => {
+          const existing = reportByGameId.get(g.eventId);
+          if (existing) return existing; // real submitted report - use it as-is
+
+          // No report yet - build a stub row from schedule data, with
+          // score/YC/RC/incident_report all left blank (null).
+          return {
+            game_id: g.eventId,
+            game_date: g.startTime,
+            division_id: g.divisionId,
+            gender: g.gender,
+            incident_report: null,
+            team1_id: g.homeTeamId,
+            team1_name: g.homeTeam,
+            team1_score: null,
+            team2_id: g.awayTeamId,
+            team2_name: g.awayTeam,
+            team2_score: null,
+            submitted_at: null,
+            team1_yellow_count: null,
+            team1_red_count: null,
+            team2_yellow_count: null,
+            team2_red_count: null,
+          };
+        });
+
+        // Any report whose game_id didn't come back from the schedule call
+        // (e.g. a game outside the fetched range, or a schedule-monitor
+        // edge case) still gets included - never silently drop a real report.
+        const mergedIds = new Set(mergedRows.map(r => r.game_id));
+        for (const r of reportResult.rows) {
+          if (!mergedIds.has(r.game_id)) mergedRows.push(r);
+        }
+      }
+
+      // Apply the same filters to the merged set, regardless of whether a
+      // report exists for a given game.
+      if (divisions.length > 0) mergedRows = mergedRows.filter(r => divisions.includes(r.division_id));
+      if (gender) mergedRows = mergedRows.filter(r => r.gender === gender);
+      if (team) mergedRows = mergedRows.filter(r => r.team1_id === team || r.team2_id === team);
+
+      mergedRows.sort((a, b) => {
+        const dateA = a.game_date ? new Date(a.game_date).getTime() : -Infinity;
+        const dateB = b.game_date ? new Date(b.game_date).getTime() : -Infinity;
+        return dateB - dateA;
+      });
+
+      const reports = mergedRows.map(r => ({
         ...r,
         division_name: r.division_id ? ((DIVISION_LOOKUP[r.division_id] && DIVISION_LOOKUP[r.division_id].name) || r.division_id) : null,
       }));
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ reports }));
     } catch (err) {
       console.error('[api/match-reports] Error:', err.message);
