@@ -61,7 +61,7 @@
       <div class="field">
         <label style="visibility:hidden;">.</label>
         <label style="display:flex; align-items:center; gap:6px; font-weight:400; text-transform:none; font-size:13px; padding:8px 0;">
-          <input type="checkbox" id="onlyWithReport"  /> Only show games with a report
+          <input type="checkbox" id="onlyWithReport" onchange="applyReportFilterAndRender()" /> Only show games with a report
         </label>
       </div>
       <div class="field">
@@ -91,11 +91,12 @@
   </div>
 
   <div class="card">
-    <div id="reportsBox"><p class="muted">Set your filters and click "Load Reports" below.</p></div>
+    <div id="reportsBox"><p class="muted">Loading...</p></div>
   </div>
 </main>
 <script>
   let selectedDivisionIds = new Set(); // multi-select state for the division filter
+  let lastLoadedReports = []; // the most recent server response - "Only show games with a report" filters THIS client-side, no re-fetch
 
   async function loadFilterOptions() {
     const res = await fetch('/api/match-reports/filter-options');
@@ -169,6 +170,13 @@
     }
   }
 
+  // Purely client-side - filters the already-loaded data, no re-fetch.
+  function applyReportFilterAndRender() {
+    const onlyWithReport = document.getElementById('onlyWithReport').checked;
+    const filtered = onlyWithReport ? lastLoadedReports.filter(r => r.has_report) : lastLoadedReports;
+    renderReports(filtered);
+  }
+
   async function loadReports() {
     const box = document.getElementById('reportsBox');
     const params = new URLSearchParams();
@@ -181,13 +189,12 @@
     if (gender) params.set('gender', gender);
     if (dateFrom) params.set('dateFrom', dateFrom);
     if (dateTo) params.set('dateTo', dateTo);
-    if (document.getElementById('onlyWithReport').checked) params.set('onlyWithReport', 'true');
-
     try {
       const res = await fetch('/api/match-reports?' + params.toString());
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Unknown error');
-      renderReports(data.reports || []);
+      lastLoadedReports = data.reports || [];
+      applyReportFilterAndRender();
     } catch (e) {
       box.innerHTML = '<div class="err-box">Failed to load: ' + escapeHtml(e.message) + '</div>';
     }
@@ -349,6 +356,7 @@
   }
 
   loadFilterOptions();
+  loadReports();
 </script>
 </body>
 </html>

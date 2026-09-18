@@ -725,7 +725,6 @@ const server = http.createServer(async (req, res) => {
       const team = url.searchParams.get('team');
       const gender = url.searchParams.get('gender');
       const dateFromParam = url.searchParams.get('dateFrom');
-      const onlyWithReport = url.searchParams.get('onlyWithReport') === 'true';
       const dateToParam = url.searchParams.get('dateTo');
 
       // Default to the last 30 days through now if no range given - a
@@ -844,8 +843,6 @@ const server = http.createServer(async (req, res) => {
           has_report: r.team1_score != null || r.team2_score != null || isForfeit,
         };
       });
-
-      if (onlyWithReport) reports = reports.filter(r => r.has_report);
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ reports }));
