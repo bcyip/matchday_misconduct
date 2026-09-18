@@ -110,6 +110,7 @@
           <th>Reason</th>
           <th>Min</th>
           <th>Games</th>
+          <th>Served</th>
           <th>Status</th>
         </tr>
       </thead>
@@ -181,7 +182,7 @@
     document.getElementById('resultsMeta').textContent = misconductData.length + ' incident(s) found';
 
     if (!misconductData.length) {
-      tbody.innerHTML = '<tr><td colspan="8" class="muted">No misconduct matches these filters.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" class="muted">No misconduct matches these filters.</td></tr>';
       return;
     }
 
@@ -199,11 +200,14 @@
           <td>${isReport ? '—' : (row.event_type === 'Red Card'
             ? `${row.games_suspended != null ? row.games_suspended : row.standard_games}${row.games_suspended != null && row.games_suspended !== row.standard_games ? ' <span class="muted">(std: ' + row.standard_games + ')</span>' : ''}`
             : '—')}</td>
+          <td>${isReport ? '—' : (row.event_type === 'Red Card' && row.games_served != null
+            ? `${row.games_served}${row.games_served >= (row.games_suspended != null ? row.games_suspended : row.standard_games) ? ' <span style="color:var(--success, #1F7A4D);">✓</span>' : ''}`
+            : '—')}</td>
           <td>${isReport ? '' : `<span class="badge badge-${row.status}">${row.status.replace('_', ' ')}</span>`}</td>
         </tr>
       `;
       const detailHtml = String(expandedEntryId) === String(row.entry_id)
-        ? `<tr><td colspan="8">${isReport ? renderIncidentReportPanel(row) : renderDetailPanel(row)}</td></tr>`
+        ? `<tr><td colspan="9">${isReport ? renderIncidentReportPanel(row) : renderDetailPanel(row)}</td></tr>`
         : '';
       return rowHtml + detailHtml;
     }).join('');

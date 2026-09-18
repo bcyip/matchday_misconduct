@@ -1021,6 +1021,10 @@ const server = http.createServer(async (req, res) => {
           s.game_date,
           r.status, r.committee_notes, r.reviewed_by, r.reviewed_at,
           sus.games_suspended, sus.standard_games,
+          (SELECT COUNT(*) FROM match_report_scores mrs2
+           WHERE (mrs2.team1_id = sus.team_id OR mrs2.team2_id = sus.team_id)
+           AND mrs2.game_date > sus.issued_from_game_date
+           AND mrs2.game_date < now()) AS games_served,
           NULL AS incident_report
         FROM match_report_entries e
         LEFT JOIN match_report_scores s ON s.game_id = e.game_id
@@ -1051,7 +1055,7 @@ const server = http.createServer(async (req, res) => {
           'Incident Report' AS reason, NULL AS supplemental_report,
           s.game_date,
           NULL AS status, NULL AS committee_notes, NULL AS reviewed_by, NULL AS reviewed_at,
-          NULL AS games_suspended, NULL AS standard_games,
+          NULL AS games_suspended, NULL AS standard_games, NULL AS games_served,
           s.incident_report
         FROM match_report_scores s
         WHERE ${incidentConditions.join(' AND ')}
