@@ -59,6 +59,12 @@
         </select>
       </div>
       <div class="field">
+        <label style="visibility:hidden;">.</label>
+        <label style="display:flex; align-items:center; gap:6px; font-weight:400; text-transform:none; font-size:13px; padding:8px 0;">
+          <input type="checkbox" id="onlyWithReport" onchange="loadReports()" /> Only show games with a report
+        </label>
+      </div>
+      <div class="field">
         <label for="dateFrom">From</label>
         <input type="date" id="dateFrom" onchange="loadReports()" />
       </div>
@@ -136,6 +142,7 @@
     if (gender) params.set('gender', gender);
     if (dateFrom) params.set('dateFrom', dateFrom);
     if (dateTo) params.set('dateTo', dateTo);
+    if (document.getElementById('onlyWithReport').checked) params.set('onlyWithReport', 'true');
 
     try {
       const res = await fetch('/api/match-reports?' + params.toString());
@@ -158,7 +165,7 @@
       box.innerHTML = '<p class="muted">No games match these filters.</p>';
       return;
     }
-    const missingCount = reports.filter(r => r.team1_score == null && r.team2_score == null).length;
+    const missingCount = reports.filter(r => !r.has_report).length;
     box.innerHTML = `
       <p class="muted" style="margin-top:0;">${reports.length} game(s)${missingCount > 0 ? ' - ' + missingCount + ' missing a report' : ''}</p>
       <div style="overflow-x:auto;">
@@ -171,21 +178,28 @@
         </tr></thead>
         <tbody>
           ${reports.map(r => {
-            const hasReport = r.team1_score != null || r.team2_score != null;
+            const rowStyle = r.is_forfeit ? ' style="background:#F4F6FA;"'
+              : !r.has_report ? (r.flagged_external ? ' style="background:#FDF0DD;"' : ' style="background:#FBEAE8;"')
+              : '';
             return `
-            <tr${!hasReport ? (r.flagged_external ? ' style="background:#FDF0DD;"' : ' style="background:#FBEAE8;"') : ''}>
+            <tr${rowStyle}>
               <td>${r.game_date ? new Date(r.game_date).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short' }) + ' ET' : '—'}</td>
               <td>${escapeHtml(r.gender || '')}</td>
               <td>${escapeHtml(r.division_name || '')}</td>
               <td style="text-align:right;">${escapeHtml(r.team1_name)}</td>
-              <td style="text-align:center;">${cardCount(r.team1_yellow_count, 'yc-count')}</td>
-              <td style="text-align:center;">${cardCount(r.team1_red_count, 'rc-count')}</td>
-              <td style="text-align:center; font-weight:700; white-space:nowrap;">${hasReport ? r.team1_score + ' - ' + r.team2_score : '—'}</td>
-              <td style="text-align:center;">${cardCount(r.team2_red_count, 'rc-count')}</td>
-              <td style="text-align:center;">${cardCount(r.team2_yellow_count, 'yc-count')}</td>
+              <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team1_yellow_count, 'yc-count')}</td>
+              <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team1_red_count, 'rc-count')}</td>
+              <td style="text-align:center; font-weight:700; white-space:nowrap;">${r.is_forfeit ? 'Forfeit' : (r.has_report ? r.team1_score + ' - ' + r.team2_score : '—')}</td>
+              <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team2_red_count, 'rc-count')}</td>
+              <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team2_yellow_count, 'yc-count')}</td>
               <td>${escapeHtml(r.team2_name)}</td>
               <td>
-                ${hasReport ? `
+                ${r.is_forfeit ? `
+                  <label style="display:flex; align-items:center; gap:5px; font-size:11.5px; font-weight:400; cursor:pointer;">
+                    <input type="checkbox" checked onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.checked)" />
+                    Forfeit
+                  </label>
+                ` : r.has_report ? `
                   <button class="push-score-btn" onclick="pushScore('${escapeJs(r.game_id)}', this)">Push Score to SE</button>
                   <span class="push-score-result" style="display:block; font-size:11px; margin-top:3px;"></span>
                   ${r.incident_report ? `<button class="push-score-btn" style="margin-top:4px;" onclick="toggleIncidentReport('${escapeJs(r.game_id)}')">View Incident Report</button>` : ''}
@@ -194,6 +208,10 @@
                   <label style="display:flex; align-items:center; gap:5px; font-size:11.5px; font-weight:400; margin-top:4px; cursor:pointer;">
                     <input type="checkbox" ${r.flagged_external ? 'checked' : ''} onchange="toggleExternalFlag('${escapeJs(r.game_id)}', this.checked)" />
                     Received elsewhere - needs entry
+                  </label>
+                  <label style="display:flex; align-items:center; gap:5px; font-size:11.5px; font-weight:400; margin-top:3px; cursor:pointer;">
+                    <input type="checkbox" onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.checked)" />
+                    Forfeit - no report needed
                   </label>
                 `}
               </td>
@@ -235,6 +253,21 @@
     } catch (e) {
       alert('Failed to update: ' + e.message);
       loadReports(); // reload to reflect the actual (unchanged) state
+    }
+  }
+
+  async function toggleForfeitFlag(gameId, forfeit) {
+    try {
+      const res = await fetch('/api/match-reports/' + encodeURIComponent(gameId) + '/flag-forfeit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ forfeit }),
+      });
+      if (!res.ok) throw new Error('Failed to save');
+      loadReports(); // reload so the row's display (score column, actions) updates too
+    } catch (e) {
+      alert('Failed to update: ' + e.message);
+      loadReports();
     }
   }
 
