@@ -1021,10 +1021,13 @@ const server = http.createServer(async (req, res) => {
           s.game_date,
           r.status, r.committee_notes, r.reviewed_by, r.reviewed_at,
           sus.games_suspended, sus.standard_games,
-          (SELECT COUNT(*) FROM match_report_scores mrs2
-           WHERE (mrs2.team1_id = sus.team_id OR mrs2.team2_id = sus.team_id)
-           AND mrs2.game_date > sus.issued_from_game_date
-           AND mrs2.game_date < now()) AS games_served,
+          LEAST(
+            (SELECT COUNT(*) FROM match_report_scores mrs2
+             WHERE (mrs2.team1_id = sus.team_id OR mrs2.team2_id = sus.team_id)
+             AND mrs2.game_date > sus.issued_from_game_date
+             AND mrs2.game_date < now()),
+            COALESCE(sus.games_suspended, sus.standard_games)
+          ) AS games_served,
           NULL AS incident_report
         FROM match_report_entries e
         LEFT JOIN match_report_scores s ON s.game_id = e.game_id
