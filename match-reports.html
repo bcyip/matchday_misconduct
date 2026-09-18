@@ -59,10 +59,13 @@
         </select>
       </div>
       <div class="field">
-        <label style="visibility:hidden;">.</label>
-        <label style="display:flex; align-items:center; gap:6px; font-weight:400; text-transform:none; font-size:13px; padding:8px 0;">
-          <input type="checkbox" id="onlyWithReport" onchange="applyReportFilterAndRender()" /> Only show games with a report
-        </label>
+        <label for="reportStatusFilter">Show</label>
+        <select id="reportStatusFilter" onchange="applyReportFilterAndRender()">
+          <option value="all">All Games</option>
+          <option value="has_report">Has Report</option>
+          <option value="missing_report">Missing Report</option>
+          <option value="no_report_registered">No Report Registered</option>
+        </select>
       </div>
       <div class="field">
         <label for="dateFrom">From</label>
@@ -91,6 +94,7 @@
   </div>
 
   <div class="card">
+    <div id="summaryStats" class="muted" style="margin-bottom:10px; font-size:13.5px;"></div>
     <div id="reportsBox"><p class="muted">Loading...</p></div>
   </div>
 </main>
@@ -172,9 +176,27 @@
 
   // Purely client-side - filters the already-loaded data, no re-fetch.
   function applyReportFilterAndRender() {
-    const onlyWithReport = document.getElementById('onlyWithReport').checked;
-    const filtered = onlyWithReport ? lastLoadedReports.filter(r => r.has_report) : lastLoadedReports;
+    const status = document.getElementById('reportStatusFilter').value;
+    let filtered = lastLoadedReports;
+    if (status === 'has_report') filtered = lastLoadedReports.filter(r => r.has_report);
+    else if (status === 'missing_report') filtered = lastLoadedReports.filter(r => !r.has_report);
+    else if (status === 'no_report_registered') filtered = lastLoadedReports.filter(r => !r.has_report && !r.flagged_external);
+    renderSummaryStats();
     renderReports(filtered);
+  }
+
+  // Summary counts are always over the FULL loaded set, regardless of
+  // which filter is currently applied - so the numbers stay stable as a
+  // reference point while browsing different filtered views.
+  function renderSummaryStats() {
+    const totalGames = lastLoadedReports.length;
+    const missingReport = lastLoadedReports.filter(r => !r.has_report).length;
+    const noReportRegistered = lastLoadedReports.filter(r => !r.has_report && !r.flagged_external).length;
+    document.getElementById('summaryStats').innerHTML = `
+      <strong>${totalGames}</strong> total games &nbsp;·&nbsp;
+      <strong>${missingReport}</strong> missing report &nbsp;·&nbsp;
+      <strong>${noReportRegistered}</strong> no report registered
+    `;
   }
 
   async function loadReports() {
