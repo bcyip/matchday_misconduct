@@ -86,9 +86,15 @@
     <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;">
       <div>
         <strong style="font-size:13.5px;">Historical Games Cache</strong>
-        <p class="muted" style="margin:2px 0 0;">Past games shown above come from a local cache, not a live fetch every time. Click to pull the latest directly from SportsEngine (last 4 days by default).</p>
+        <p class="muted" style="margin:2px 0 0;">Past games shown above come from a local cache, not a live fetch every time. Sync the last 4 days by default, or pick one specific date below.</p>
       </div>
-      <button type="button" onclick="syncSchedule()" id="syncBtn" class="push-score-btn" style="white-space:nowrap;">Sync Historical Games</button>
+      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <div style="display:flex; align-items:center; gap:6px;">
+          <label for="syncSingleDate" style="font-size:12.5px; font-weight:600; color:var(--gray); text-transform:uppercase; letter-spacing:0.03em;">Single date</label>
+          <input type="date" id="syncSingleDate" style="padding:7px 9px; border:1px solid var(--border); border-radius:6px; font-size:13px;" />
+        </div>
+        <button type="button" onclick="syncSchedule()" id="syncBtn" class="push-score-btn" style="white-space:nowrap;">Sync Historical Games</button>
+      </div>
     </div>
     <div id="syncResult" style="margin-top:8px; font-size:13px;"></div>
   </div>
@@ -151,8 +157,11 @@
   async function syncSchedule() {
     const btn = document.getElementById('syncBtn');
     const resultEl = document.getElementById('syncResult');
-    const dateFrom = document.getElementById('dateFrom').value;
-    const dateTo = document.getElementById('dateTo').value;
+    const singleDate = document.getElementById('syncSingleDate').value;
+    // A single date takes priority over the shared From/To range inputs -
+    // syncing just one specific day means dateFrom = dateTo = that day.
+    const dateFrom = singleDate || document.getElementById('dateFrom').value;
+    const dateTo = singleDate || document.getElementById('dateTo').value;
 
     btn.disabled = true;
     btn.textContent = 'Syncing...';
