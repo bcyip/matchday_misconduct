@@ -260,7 +260,7 @@
               : '';
             return `
             <tr${rowStyle}>
-              <td style="font-size:11.5px; color:var(--gray); white-space:nowrap;">${escapeHtml(r.game_id || '—')}</td>
+              <td style="font-size:11.5px; white-space:nowrap;">${r.game_id ? `<a href="https://octopus-app-ilp92.ondigitalocean.app/?game=${encodeURIComponent(r.game_id)}" target="_blank" rel="noopener" style="color:var(--navy);">${escapeHtml(r.game_id)}</a>` : '—'}</td>
               <td>${r.game_date ? new Date(r.game_date).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short' }) + ' ET' : '—'}</td>
               <td>${escapeHtml(r.gender || '')}</td>
               <td>${escapeHtml(r.division_name || '')}</td>
