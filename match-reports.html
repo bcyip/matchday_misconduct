@@ -248,7 +248,7 @@
       <div style="overflow-x:auto;">
       <table>
         <thead><tr>
-          <th>Game Date</th><th>Gender</th><th>Division</th>
+          <th>Match Key</th><th>Game Date</th><th>Gender</th><th>Division</th>
           <th style="text-align:right;">Team 1</th><th style="text-align:center;">YC</th><th style="text-align:center;">RC</th>
           <th style="text-align:center;">Score</th>
           <th style="text-align:center;">RC</th><th style="text-align:center;">YC</th><th>Team 2</th><th>Actions</th>
@@ -260,6 +260,7 @@
               : '';
             return `
             <tr${rowStyle}>
+              <td style="font-size:11.5px; color:var(--gray); white-space:nowrap;">${escapeHtml(r.game_id || '—')}</td>
               <td>${r.game_date ? new Date(r.game_date).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short' }) + ' ET' : '—'}</td>
               <td>${escapeHtml(r.gender || '')}</td>
               <td>${escapeHtml(r.division_name || '')}</td>
@@ -295,7 +296,7 @@
             </tr>
             ${r.incident_report ? `
             <tr id="incident-row-${escapeJs(r.game_id)}" style="display:none;">
-              <td colspan="11" style="background:var(--bg); font-size:13px;">
+              <td colspan="12" style="background:var(--bg); font-size:13px;">
                 <strong>Incident Report:</strong>
                 <div style="white-space:pre-wrap; margin-top:4px;">${escapeHtml(r.incident_report)}</div>
               </td>

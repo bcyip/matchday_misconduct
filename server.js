@@ -761,7 +761,9 @@ const server = http.createServer(async (req, res) => {
       const rangeFrom = dateFromParam ? new Date(dateFromParam) : defaultFrom;
       // Never look past the end of today (Eastern) - this view is
       // specifically PAST games, but "today" counts even before its last
-      // game has kicked off.
+      // game has kicked off. This only affects what's shown from the
+      // already-synced cache - it never triggers a new SportsEngine fetch,
+      // which only ever happens via the manual sync button below.
       const rangeToRaw = dateToParam ? new Date(dateToParam + 'T23:59:59') : now;
       const rangeTo = rangeToRaw < endOfTodayEastern ? rangeToRaw : endOfTodayEastern;
 
