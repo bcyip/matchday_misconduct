@@ -449,6 +449,24 @@ function extractGameInfo(event) {
  * no season-long pagination concern, but the same retry/dedup safeguards
  * are kept since any individual page can still hit a transient failure.
  */
+/**
+ * Returns the UTC instant corresponding to 23:59:59 Eastern time on
+ * "today" (Eastern's calendar day, not the server's or UTC's) - so a game
+ * scheduled for later today still counts as "not yet past" only relative
+ * to the exact moment, while still being includable as "today's game" for
+ * sync/display purposes. Handles EDT/EST automatically via Intl.
+ */
+function getEndOfTodayEastern(now) {
+  const offsetParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', timeZoneName: 'shortOffset'
+  }).formatToParts(now);
+  const offsetHours = parseInt(offsetParts.find(p => p.type === 'timeZoneName').value.replace('GMT', ''), 10);
+  const easternDateStr = now.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const [eY, eM, eD] = easternDateStr.split('-').map(Number);
+  const nextDayUTCMidnight = new Date(Date.UTC(eY, eM - 1, eD + 1, 0, 0, 0));
+  return new Date(nextDayUTCMidnight.getTime() - offsetHours * 60 * 60 * 1000 - 1000);
+}
+
 async function fetchGamesInRange(from, to) {
   let allEvents = [];
   let page = 1;
@@ -674,18 +692,25 @@ const server = http.createServer(async (req, res) => {
       }
       try {
         const now = new Date();
+        // End of TODAY in Eastern time (not just "right now") - so a game
+        // scheduled for later today still gets synced, while games on
+        // future days remain excluded.
+        const endOfTodayEastern = getEndOfTodayEastern(now);
+
         // Default: last 4 days, as specifically requested - a deliberate,
         // manually-triggered sync, not a wide historical backfill.
         const defaultFrom = new Date(now.getTime() - 4 * 24 * 60 * 60 * 1000);
         const rangeFrom = payload.dateFrom ? new Date(payload.dateFrom) : defaultFrom;
         const rangeToRaw = payload.dateTo ? new Date(payload.dateTo + 'T23:59:59') : now;
-        const rangeTo = rangeToRaw < now ? rangeToRaw : now; // never sync future games
+        const rangeTo = rangeToRaw < endOfTodayEastern ? rangeToRaw : endOfTodayEastern; // never sync PAST today (Eastern), but allow all of today
 
         const games = await fetchGamesInRange(rangeFrom.toISOString(), rangeTo.toISOString());
 
-        // Only past games get cached, even if the requested range somehow
-        // included later dates - this cache is specifically for history.
-        const pastGames = games.filter(g => g.startTime && new Date(g.startTime) <= now);
+        // Only games through the end of TODAY (Eastern) get cached, even if
+        // the requested range somehow included later dates - this cache is
+        // specifically for history, but "today" counts as history even if
+        // a specific game later today hasn't kicked off yet.
+        const pastGames = games.filter(g => g.startTime && new Date(g.startTime) <= endOfTodayEastern);
 
         let syncedCount = 0;
         for (const g of pastGames) {
@@ -727,14 +752,18 @@ const server = http.createServer(async (req, res) => {
       const dateFromParam = url.searchParams.get('dateFrom');
       const dateToParam = url.searchParams.get('dateTo');
 
-      // Default to the last 30 days through now if no range given - a
-      // full-season fetch on every page load would be needlessly heavy.
+      // Default to the last 30 days through today (Eastern) if no range
+      // given - a full-season fetch on every page load would be
+      // needlessly heavy.
       const now = new Date();
+      const endOfTodayEastern = getEndOfTodayEastern(now);
       const defaultFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
       const rangeFrom = dateFromParam ? new Date(dateFromParam) : defaultFrom;
-      // Never look past right now - this view is specifically PAST games.
+      // Never look past the end of today (Eastern) - this view is
+      // specifically PAST games, but "today" counts even before its last
+      // game has kicked off.
       const rangeToRaw = dateToParam ? new Date(dateToParam + 'T23:59:59') : now;
-      const rangeTo = rangeToRaw < now ? rangeToRaw : now;
+      const rangeTo = rangeToRaw < endOfTodayEastern ? rangeToRaw : endOfTodayEastern;
 
       // Existing submitted-report data for this range, keyed by game_id
       // for easy merging below. Same query/shape as before.
