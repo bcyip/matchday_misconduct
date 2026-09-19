@@ -248,7 +248,7 @@
       <div style="overflow-x:auto;">
       <table>
         <thead><tr>
-          <th>Match Key</th><th>Game Date</th><th>Gender</th><th>Division</th>
+          <th>Match Report</th><th>Game Date</th><th>Gender</th><th>Division</th>
           <th style="text-align:right;">Team 1</th><th style="text-align:center;">YC</th><th style="text-align:center;">RC</th>
           <th style="text-align:center;">Score</th>
           <th style="text-align:center;">RC</th><th style="text-align:center;">YC</th><th>Team 2</th><th>Actions</th>
@@ -260,7 +260,7 @@
               : '';
             return `
             <tr${rowStyle}>
-              <td style="font-size:11.5px; white-space:nowrap;">${r.game_id ? `<a href="https://octopus-app-ilp92.ondigitalocean.app/?game=${encodeURIComponent(r.game_id)}" target="_blank" rel="noopener" style="color:var(--navy);">${escapeHtml(r.game_id)}</a>` : '—'}</td>
+              <td style="font-size:11.5px; white-space:nowrap;">${r.game_id ? `<a href="https://octopus-app-ilp92.ondigitalocean.app/?game=${encodeURIComponent(r.game_id)}" target="_blank" rel="noopener" style="color:var(--navy);">Match Report URL</a>` : '—'}</td>
               <td>${r.game_date ? new Date(r.game_date).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short' }) + ' ET' : '—'}</td>
               <td>${escapeHtml(r.gender || '')}</td>
               <td>${escapeHtml(r.division_name || '')}</td>
