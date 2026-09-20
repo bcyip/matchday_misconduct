@@ -488,14 +488,20 @@ async function fetchGamesInRange(from, to) {
   const PER_PAGE = 40; // same conservative value as the schedule monitor - 100/page hits SportsEngine's complexity limit
   const PAGE_DELAY_MS = 1500;
 
+  console.log(`[sync-schedule] Fetching games from ${from} to ${to}...`);
+
   do {
     const data = await callSeGraphQLWithRetry(SE_EVENTS_QUERY, { orgId: parseInt(SE_ORG_ID, 10), from, to, page, perPage: PER_PAGE });
     const pageResults = (data.events && data.events.results) || [];
-    allEvents = allEvents.concat(pageResults);
+    const reportedCount = (data.events && data.events.pageInformation && data.events.pageInformation.count) || null;
     totalPages = (data.events && data.events.pageInformation && data.events.pageInformation.pages) || 1;
+    console.log(`[sync-schedule] Page ${page}/${totalPages}: got ${pageResults.length} events (SportsEngine reports total count: ${reportedCount})`);
+    allEvents = allEvents.concat(pageResults);
     page++;
     if (page <= totalPages) await seSleep(PAGE_DELAY_MS);
   } while (page <= totalPages);
+
+  console.log(`[sync-schedule] Fetched ${allEvents.length} total events across all pages before dedup.`);
 
   // Dedup by event ID - same pagination-drift safeguard used elsewhere in
   // this project.
@@ -507,6 +513,7 @@ async function fetchGamesInRange(from, to) {
     deduped.push(event);
   }
 
+  console.log(`[sync-schedule] ${deduped.length} unique events after dedup (from ${allEvents.length} raw).`);
   return deduped.map(extractGameInfo);
 }
 
