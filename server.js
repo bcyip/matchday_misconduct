@@ -456,15 +456,29 @@ function extractGameInfo(event) {
  * to the exact moment, while still being includable as "today's game" for
  * sync/display purposes. Handles EDT/EST automatically via Intl.
  */
-function getEndOfTodayEastern(now) {
+/**
+ * Converts a 'YYYY-MM-DD' string (as entered in a date input, meant as an
+ * EASTERN calendar date) into the correct UTC instants for the start and
+ * end of that day in Eastern time. Naively parsing 'YYYY-MM-DDT23:59:59'
+ * treats it as UTC, not Eastern - which silently excludes any evening
+ * game (Eastern's day boundary is hours off from UTC's). Handles
+ * EDT/EST automatically.
+ */
+function getEasternDayBounds(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const probe = new Date(Date.UTC(y, m - 1, d, 12, 0, 0)); // noon UTC - safely mid-day regardless of offset, just for reading the offset
   const offsetParts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York', timeZoneName: 'shortOffset'
-  }).formatToParts(now);
+  }).formatToParts(probe);
   const offsetHours = parseInt(offsetParts.find(p => p.type === 'timeZoneName').value.replace('GMT', ''), 10);
+  const start = new Date(Date.UTC(y, m - 1, d, 0, 0, 0) - offsetHours * 60 * 60 * 1000);
+  const end = new Date(Date.UTC(y, m - 1, d + 1, 0, 0, 0) - offsetHours * 60 * 60 * 1000 - 1000);
+  return { start, end };
+}
+
+function getEndOfTodayEastern(now) {
   const easternDateStr = now.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-  const [eY, eM, eD] = easternDateStr.split('-').map(Number);
-  const nextDayUTCMidnight = new Date(Date.UTC(eY, eM - 1, eD + 1, 0, 0, 0));
-  return new Date(nextDayUTCMidnight.getTime() - offsetHours * 60 * 60 * 1000 - 1000);
+  return getEasternDayBounds(easternDateStr).end;
 }
 
 async function fetchGamesInRange(from, to) {
@@ -700,8 +714,8 @@ const server = http.createServer(async (req, res) => {
         // Default: last 4 days, as specifically requested - a deliberate,
         // manually-triggered sync, not a wide historical backfill.
         const defaultFrom = new Date(now.getTime() - 4 * 24 * 60 * 60 * 1000);
-        const rangeFrom = payload.dateFrom ? new Date(payload.dateFrom) : defaultFrom;
-        const rangeToRaw = payload.dateTo ? new Date(payload.dateTo + 'T23:59:59') : now;
+        const rangeFrom = payload.dateFrom ? getEasternDayBounds(payload.dateFrom).start : defaultFrom;
+        const rangeToRaw = payload.dateTo ? getEasternDayBounds(payload.dateTo).end : now;
         const rangeTo = rangeToRaw < endOfTodayEastern ? rangeToRaw : endOfTodayEastern; // never sync PAST today (Eastern), but allow all of today
 
         const games = await fetchGamesInRange(rangeFrom.toISOString(), rangeTo.toISOString());
@@ -758,13 +772,13 @@ const server = http.createServer(async (req, res) => {
       const now = new Date();
       const endOfTodayEastern = getEndOfTodayEastern(now);
       const defaultFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-      const rangeFrom = dateFromParam ? new Date(dateFromParam) : defaultFrom;
+      const rangeFrom = dateFromParam ? getEasternDayBounds(dateFromParam).start : defaultFrom;
       // Never look past the end of today (Eastern) - this view is
       // specifically PAST games, but "today" counts even before its last
       // game has kicked off. This only affects what's shown from the
       // already-synced cache - it never triggers a new SportsEngine fetch,
       // which only ever happens via the manual sync button below.
-      const rangeToRaw = dateToParam ? new Date(dateToParam + 'T23:59:59') : now;
+      const rangeToRaw = dateToParam ? getEasternDayBounds(dateToParam).end : now;
       const rangeTo = rangeToRaw < endOfTodayEastern ? rangeToRaw : endOfTodayEastern;
 
       // Existing submitted-report data for this range, keyed by game_id
