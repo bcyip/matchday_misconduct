@@ -800,9 +800,9 @@ const server = http.createServer(async (req, res) => {
 
       const [flaggedResult, forfeitResult] = await Promise.all([
         pool.query('SELECT game_id FROM external_report_flags'),
-        pool.query('SELECT game_id FROM forfeit_flags'),
+        pool.query('SELECT game_id, reason FROM forfeit_flags'),
       ]);
-      const forfeitIds = new Set(forfeitResult.rows.map(r => r.game_id));
+      const forfeitReasonByGameId = new Map(forfeitResult.rows.map(r => [r.game_id, r.reason]));
       const flaggedIds = new Set(flaggedResult.rows.map(r => r.game_id));
 
       let mergedRows;
@@ -863,14 +863,16 @@ const server = http.createServer(async (req, res) => {
       });
 
       let reports = mergedRows.map(r => {
-        const isForfeit = forfeitIds.has(r.game_id);
+        const forfeitReason = forfeitReasonByGameId.get(r.game_id) || null;
+        const isForfeit = forfeitReason != null;
         return {
           ...r,
           division_name: r.division_id ? ((DIVISION_LOOKUP[r.division_id] && DIVISION_LOOKUP[r.division_id].name) || r.division_id) : null,
           flagged_external: flaggedIds.has(r.game_id),
           is_forfeit: isForfeit,
-          // A forfeit counts as "entered" even with no real score data -
-          // there's nothing more to report for it.
+          forfeit_reason: forfeitReason, // 'forfeit' | 'postponed' | 'rainout' | null
+          // A forfeit/postponed/rainout counts as "entered" even with no
+          // real score data - there's nothing more to report for it.
           has_report: r.team1_score != null || r.team2_score != null || isForfeit,
         };
       });
@@ -955,12 +957,17 @@ const server = http.createServer(async (req, res) => {
         return res.end(JSON.stringify({ error: 'Invalid JSON body' }));
       }
       try {
-        if (payload.forfeit) {
+        const ALLOWED_REASONS = ['forfeit', 'postponed', 'rainout'];
+        if (payload.reason) {
+          if (!ALLOWED_REASONS.includes(payload.reason)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: 'reason must be one of: ' + ALLOWED_REASONS.join(', ') }));
+          }
           await pool.query(
-            `INSERT INTO forfeit_flags (game_id, flagged_by)
-             VALUES ($1, $2)
-             ON CONFLICT (game_id) DO NOTHING`,
-            [gameId, session.name || null]
+            `INSERT INTO forfeit_flags (game_id, reason, flagged_by, flagged_at)
+             VALUES ($1, $2, $3, now())
+             ON CONFLICT (game_id) DO UPDATE SET reason = EXCLUDED.reason, flagged_by = EXCLUDED.flagged_by, flagged_at = now()`,
+            [gameId, payload.reason, session.name || null]
           );
         } else {
           await pool.query('DELETE FROM forfeit_flags WHERE game_id = $1', [gameId]);

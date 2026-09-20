@@ -258,6 +258,9 @@
             const rowStyle = r.is_forfeit ? ' style="background:#F4F6FA;"'
               : !r.has_report ? (r.flagged_external ? ' style="background:#FDF0DD;"' : ' style="background:#FBEAE8;"')
               : '';
+            const reasonLabel = r.forfeit_reason
+              ? r.forfeit_reason.charAt(0).toUpperCase() + r.forfeit_reason.slice(1)
+              : null;
             return `
             <tr${rowStyle}>
               <td style="font-size:11.5px; white-space:nowrap;">${r.game_id ? `<a href="https://octopus-app-ilp92.ondigitalocean.app/?game=${encodeURIComponent(r.game_id)}" target="_blank" rel="noopener" style="color:var(--navy);">Match Report URL</a>` : '—'}</td>
@@ -267,16 +270,18 @@
               <td style="text-align:right;">${escapeHtml(r.team1_name)}</td>
               <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team1_yellow_count, 'yc-count')}</td>
               <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team1_red_count, 'rc-count')}</td>
-              <td style="text-align:center; font-weight:700; white-space:nowrap;">${r.is_forfeit ? 'Forfeit' : (r.has_report ? r.team1_score + ' - ' + r.team2_score : '—')}</td>
+              <td style="text-align:center; font-weight:700; white-space:nowrap;">${r.is_forfeit ? escapeHtml(reasonLabel) : (r.has_report ? r.team1_score + ' - ' + r.team2_score : '—')}</td>
               <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team2_red_count, 'rc-count')}</td>
               <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team2_yellow_count, 'yc-count')}</td>
               <td>${escapeHtml(r.team2_name)}</td>
               <td>
                 ${r.is_forfeit ? `
-                  <label style="display:flex; align-items:center; gap:5px; font-size:11.5px; font-weight:400; cursor:pointer;">
-                    <input type="checkbox" checked onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.checked)" />
-                    Forfeit/Rescheduled
-                  </label>
+                  <select onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.value)" style="font-size:11.5px; padding:3px 5px; border:1px solid var(--border); border-radius:5px;">
+                    <option value="forfeit" ${r.forfeit_reason === 'forfeit' ? 'selected' : ''}>Forfeit</option>
+                    <option value="postponed" ${r.forfeit_reason === 'postponed' ? 'selected' : ''}>Postponed</option>
+                    <option value="rainout" ${r.forfeit_reason === 'rainout' ? 'selected' : ''}>Rainout</option>
+                    <option value="">— Clear —</option>
+                  </select>
                 ` : r.has_report ? `
                   <button class="push-score-btn" onclick="pushScore('${escapeJs(r.game_id)}', this)">Push Score to SE</button>
                   <span class="push-score-result" style="display:block; font-size:11px; margin-top:3px;"></span>
@@ -287,10 +292,12 @@
                     <input type="checkbox" ${r.flagged_external ? 'checked' : ''} onchange="toggleExternalFlag('${escapeJs(r.game_id)}', this.checked)" />
                     MO report received
                   </label>
-                  <label style="display:flex; align-items:center; gap:5px; font-size:11.5px; font-weight:400; margin-top:3px; cursor:pointer;">
-                    <input type="checkbox" onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.checked)" />
-                    Forfeit/Rescheduled
-                  </label>
+                  <select onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.value)" style="font-size:11.5px; padding:3px 5px; margin-top:4px; border:1px solid var(--border); border-radius:5px;">
+                    <option value="" selected>Forfeit/Postponed/Rainout?</option>
+                    <option value="forfeit">Forfeit</option>
+                    <option value="postponed">Postponed</option>
+                    <option value="rainout">Rainout</option>
+                  </select>
                 `}
               </td>
             </tr>
@@ -334,12 +341,12 @@
     }
   }
 
-  async function toggleForfeitFlag(gameId, forfeit) {
+  async function toggleForfeitFlag(gameId, reason) {
     try {
       const res = await fetch('/api/match-reports/' + encodeURIComponent(gameId) + '/flag-forfeit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ forfeit }),
+        body: JSON.stringify({ reason: reason || null }),
       });
       if (!res.ok) throw new Error('Failed to save');
       loadReports(); // reload so the row's display (score column, actions) updates too
