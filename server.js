@@ -869,6 +869,10 @@ const server = http.createServer(async (req, res) => {
         'SELECT * FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2',
         [rangeFrom.toISOString(), rangeTo.toISOString()]
       );
+      // SportsEngine's own score, kept SEPARATE from our own report score
+      // deliberately - never merged into team1_score/team2_score, so the
+      // two sources are never confused with each other on display.
+      const seScoreByGameId = new Map(cacheResult.rows.map(g => [g.game_id, { seHomeScore: g.se_home_score, seAwayScore: g.se_away_score }]));
 
       mergedRows = cacheResult.rows.map(g => {
         const existing = reportByGameId.get(g.game_id);
@@ -927,6 +931,11 @@ const server = http.createServer(async (req, res) => {
           is_forfeit: isForfeit,
           forfeit_reason: forfeitReason, // 'forfeit' | 'postponed' | 'rainout' | null
           referee_paid: forfeitInfo ? forfeitInfo.referee_paid : null, // true | false | null (undecided)
+          // SportsEngine's own score - kept SEPARATE from our own report
+          // score (team1_score/team2_score above) deliberately. Only
+          // available for games that have actually been synced.
+          se_home_score: (seScoreByGameId.get(r.game_id) || {}).seHomeScore || null,
+          se_away_score: (seScoreByGameId.get(r.game_id) || {}).seAwayScore || null,
           // A forfeit/postponed/rainout counts as "entered" even with no
           // real score data - there's nothing more to report for it.
           has_report: r.team1_score != null || r.team2_score != null || isForfeit,
