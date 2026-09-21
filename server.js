@@ -67,67 +67,73 @@ const SESSION_LIFETIME_MS = 8 * 60 * 60 * 1000; // 8 hours
 // a readable name for display/filtering on the match reports page -
 // division_id itself (the raw SportsEngine ID) is what's actually stored.
 const DIVISION_LOOKUP = {
-  '6a4439745407815052443199': { name: 'AL/MS', gender: 'Men' },
-  '6a4439745407813fac44341f': { name: 'Baltimore', gender: 'Men' },
-  '6a0c980026aee381f43b3ef0': { name: 'Big Sky', gender: 'Men' },
-  '6a4e96e416115e0153c5de9d': { name: 'Crossroads', gender: 'Men' },
-  '6a44397409f291d00804fde8': { name: 'Florida North', gender: 'Men' },
-  '6a4439744e42a26275c7ff31': { name: 'Florida South', gender: 'Men' },
-  '6a443974b5457c8f19bccbfc': { name: 'Georgia', gender: 'Men' },
-  '6a4e96e4c7769d01229fb5c6': { name: 'Great Lakes', gender: 'Men' },
-  '6a4e96e47d61ac00f01ad8b8': { name: 'Great Lakes II', gender: 'Men' },
-  '6a4e96e4801326012116f744': { name: 'Great Plains', gender: 'Men' },
-  '6a4e96e46b8d1e00ef1ee690': { name: 'Heartland', gender: 'Men' },
-  '6a4e96e416115e0122c5e2c1': { name: 'Heartland II', gender: 'Men' },
-  '6a44397409f291e60904fdda': { name: 'Hudson Valley', gender: 'Men' },
-  '6a443974b5457c54e4bcd12d': { name: 'KY/TN', gender: 'Men' },
-  '6a0cb110cdb76433cc151485': { name: 'Midwest North', gender: 'Men' },
-  '6a0e070026aee3f6e43b446f': { name: 'Midwest North II', gender: 'Men' },
-  '6a0e0700cdb76416601513ae': { name: 'Midwest South', gender: 'Men' },
-  '6a4e96e46b8d1e01201ee2ce': { name: 'Ozark', gender: 'Men' },
-  '6a44397409f29192050500f1': { name: 'NC East', gender: 'Men' },
-  '6a4439744e42a29553c7fe6c': { name: 'NC West', gender: 'Men' },
-  '6a4439743c1d137b18c8db12': { name: 'New England Central', gender: 'Men' },
-  '6a443974593ddf505e16a197': { name: 'New England North', gender: 'Men' },
-  '6a44397454078160b344310a': { name: 'New England South', gender: 'Men' },
-  '6a0c980026aee362b23b3f0e': { name: 'NorCal', gender: 'Men' },
-  '6a0c980004d6b0c7a8af73bd': { name: 'NorCal II', gender: 'Men' },
-  '6a0c980098c2fde79e7c20e8': { name: 'Northwest', gender: 'Men' },
-  '6a0e08bbf841cfba91996998': { name: 'Northwoods', gender: 'Men' },
-  '6a0e09e298c2fd5b067c22c4': { name: 'Northwoods II', gender: 'Men' },
-  '6a4439744e42a24ee3c80243': { name: 'NYC', gender: 'Men' },
-  '6a443974b5457c6597bccdad': { name: 'Philly', gender: 'Men' },
-  '6a0e08bb61444a4db0f2ef89': { name: 'Prairie', gender: 'Men' },
-  '6a4e96e48dabb800efcfbce9': { name: 'Red River', gender: 'Men' },
-  '6a4e96e48dabb80151cfb8bd': { name: 'Red River II', gender: 'Men' },
-  '6a4e96e4c7769d00f19fb81b': { name: 'Rocky Mountain', gender: 'Men' },
-  '6a4e96e435cc6d00ef70bd6d': { name: 'Rocky Mountain II', gender: 'Men' },
-  '6a4e96e4c7769d00bc9fbb3f': { name: 'Sabine River', gender: 'Men' },
-  '6a4e96e48dabb80120cfb96d': { name: 'Sabine River II', gender: 'Men' },
-  '6a0c980026aee3a5643b3edf': { name: 'SoCal', gender: 'Men' },
-  '6a0c980098c2fd32fc7c1d07': { name: 'SoCal II', gender: 'Men' },
-  '6a3ed52cf2a55d01e50c59e5': { name: 'SoCal III', gender: 'Men' },
-  '6a4e96e480132600f016f99d': { name: 'Southwest', gender: 'Men' },
-  '6a4e96e4c7769d01539fb593': { name: 'Southwest II', gender: 'Men' },
-  '6a0c9800bc500ed1f8da9d08': { name: 'Utah', gender: 'Men' },
-  '6a443974593ddf60ee169e3f': { name: 'Virginia', gender: 'Men' },
-  '6a44397409f291bc4904fe1b': { name: 'Washington DC', gender: 'Men' },
-  '6a4446b9c3ff52e2d366a921': { name: 'DMV', gender: 'Women' },
-  '6a444639c3ff52b71466af8b': { name: 'FL', gender: 'Women' },
-  '6a0e0a64a70302e718b84569': { name: 'Midwest', gender: 'Women' },
-  '6a0e0a6498c2fd83787c1db1': { name: 'Midwest II', gender: 'Women' },
-  '6a46cdfc06f455aa0cc3badb': { name: 'New England', gender: 'Women' },
-  '6a0c982c61444a4e0cf2efa3': { name: 'NorCal', gender: 'Women' },
-  '6a0c982c61444a7966f2eb9a': { name: 'NorCal II', gender: 'Women' },
-  '6a0c982cf841cf9b0499667d': { name: 'Northwest', gender: 'Women' },
-  '6a0c982c98c2fd32fc7c1d0d': { name: 'Oregon II', gender: 'Women' },
-  '6a4e9b904b609600f0e70d42': { name: 'Ozark', gender: 'Women' },
-  '6a44470e99ca5a7f419d52d3': { name: 'Philly', gender: 'Women' },
-  '6a4e9b6a801326012116f792': { name: 'Rocky Mountain', gender: 'Women' },
-  '6a4e9b6a4b60960121e70967': { name: 'Rocky Mountain II', gender: 'Women' },
-  '6a0c982c98c2fd79027c1c4f': { name: 'SoCal', gender: 'Women' },
-  '6a0c982c8a5826dcee7f909e': { name: 'SoCal II', gender: 'Women' },
-  '6a4e9b6a80132600f016fa7f': { name: 'Southwest', gender: 'Women' },
+  '6a4439745407815052443199': { name: 'AL/MS', gender: 'Men', conference: 'East' },
+  '6a4439745407813fac44341f': { name: 'Baltimore', gender: 'Men', conference: 'East' },
+  '6a0c980026aee381f43b3ef0': { name: 'Big Sky', gender: 'Men', conference: 'West' },
+  '6a4e96e416115e0153c5de9d': { name: 'Crossroads', gender: 'Men' }, // conference unknown - not in the provided mapping, ask if this needs a conference
+  '6a44397409f291d00804fde8': { name: 'Florida North', gender: 'Men', conference: 'East' },
+  '6a4439744e42a26275c7ff31': { name: 'Florida South', gender: 'Men', conference: 'East' },
+  '6a443974b5457c8f19bccbfc': { name: 'Georgia', gender: 'Men', conference: 'East' },
+  '6a4e96e4c7769d01229fb5c6': { name: 'Great Lakes', gender: 'Men' }, // conference unknown
+  '6a4e96e47d61ac00f01ad8b8': { name: 'Great Lakes II', gender: 'Men' }, // conference unknown
+  '6a4e96e4801326012116f744': { name: 'Great Plains', gender: 'Men', conference: 'Central' }, // Midwest -> Central per instruction
+  '6a4e96e46b8d1e00ef1ee690': { name: 'Heartland', gender: 'Men' }, // conference unknown
+  '6a4e96e416115e0122c5e2c1': { name: 'Heartland II', gender: 'Men' }, // conference unknown
+  '6a44397409f291e60904fdda': { name: 'Hudson Valley', gender: 'Men', conference: 'East' },
+  '6a443974b5457c54e4bcd12d': { name: 'KY/TN', gender: 'Men', conference: 'East' },
+  '6a0cb110cdb76433cc151485': { name: 'Midwest North', gender: 'Men', conference: 'Central' }, // Midwest -> Central per instruction
+  '6a0e070026aee3f6e43b446f': { name: 'Midwest North II', gender: 'Men' }, // conference unknown - not in the provided mapping
+  '6a0e0700cdb76416601513ae': { name: 'Midwest South', gender: 'Men', conference: 'Central' }, // Midwest -> Central per instruction
+  '6a4e96e46b8d1e01201ee2ce': { name: 'Ozark', gender: 'Men' }, // conference unknown
+  '6a44397409f29192050500f1': { name: 'NC East', gender: 'Men', conference: 'East' },
+  '6a4439744e42a29553c7fe6c': { name: 'NC West', gender: 'Men', conference: 'East' },
+  '6a4439743c1d137b18c8db12': { name: 'New England Central', gender: 'Men', conference: 'East' },
+  '6a443974593ddf505e16a197': { name: 'New England North', gender: 'Men', conference: 'East' },
+  '6a44397454078160b344310a': { name: 'New England South', gender: 'Men', conference: 'East' },
+  '6a0c980026aee362b23b3f0e': { name: 'NorCal', gender: 'Men', conference: 'West' },
+  '6a0c980004d6b0c7a8af73bd': { name: 'NorCal II', gender: 'Men', conference: 'West' },
+  '6a0c980098c2fde79e7c20e8': { name: 'Northwest', gender: 'Men' }, // conference unknown (only listed for Women)
+  '6a0e08bbf841cfba91996998': { name: 'Northwoods', gender: 'Men' }, // conference unknown
+  '6a0e09e298c2fd5b067c22c4': { name: 'Northwoods II', gender: 'Men' }, // conference unknown
+  '6a4439744e42a24ee3c80243': { name: 'NYC', gender: 'Men', conference: 'East' },
+  '6a443974b5457c6597bccdad': { name: 'Philly', gender: 'Men', conference: 'East' },
+  '6a0e08bb61444a4db0f2ef89': { name: 'Prairie', gender: 'Men' }, // conference unknown
+  '6a4e96e48dabb800efcfbce9': { name: 'Red River', gender: 'Men' }, // conference unknown
+  '6a4e96e48dabb80151cfb8bd': { name: 'Red River II', gender: 'Men' }, // conference unknown
+  '6a4e96e4c7769d00f19fb81b': { name: 'Rocky Mountain', gender: 'Men', conference: 'Central' },
+  '6a4e96e435cc6d00ef70bd6d': { name: 'Rocky Mountain II', gender: 'Men', conference: 'Central' },
+  '6a4e96e4c7769d00bc9fbb3f': { name: 'Sabine River', gender: 'Men' }, // conference unknown
+  '6a4e96e48dabb80120cfb96d': { name: 'Sabine River II', gender: 'Men' }, // conference unknown
+  '6a0c980026aee3a5643b3edf': { name: 'SoCal', gender: 'Men', conference: 'West' },
+  '6a0c980098c2fd32fc7c1d07': { name: 'SoCal II', gender: 'Men', conference: 'West' },
+  '6a3ed52cf2a55d01e50c59e5': { name: 'SoCal III', gender: 'Men', conference: 'West' },
+  '6a4e96e480132600f016f99d': { name: 'Southwest', gender: 'Men', conference: 'Central' },
+  '6a4e96e4c7769d01539fb593': { name: 'Southwest II', gender: 'Men', conference: 'Central' },
+  '6a0c9800bc500ed1f8da9d08': { name: 'Utah', gender: 'Men', conference: 'West' },
+  '6a443974593ddf60ee169e3f': { name: 'Virginia', gender: 'Men', conference: 'East' },
+  '6a44397409f291bc4904fe1b': { name: 'Washington DC', gender: 'Men', conference: 'East' }, // matches "DC" in the provided mapping
+  '6a4446b9c3ff52e2d366a921': { name: 'DMV', gender: 'Women', conference: 'East' },
+  '6a444639c3ff52b71466af8b': { name: 'FL', gender: 'Women', conference: 'East' }, // matches "Florida" in the provided mapping
+  '6a0e0a64a70302e718b84569': { name: 'Midwest', gender: 'Women', conference: 'Central' }, // Midwest -> Central per instruction
+  '6a0e0a6498c2fd83787c1db1': { name: 'Midwest II', gender: 'Women', conference: 'Central' }, // Midwest -> Central per instruction
+  '6a46cdfc06f455aa0cc3badb': { name: 'New England', gender: 'Women', conference: 'East' },
+  '6a0c982c61444a4e0cf2efa3': { name: 'NorCal', gender: 'Women', conference: 'West' },
+  '6a0c982c61444a7966f2eb9a': { name: 'NorCal II', gender: 'Women', conference: 'West' },
+  '6a0c982cf841cf9b0499667d': { name: 'Northwest', gender: 'Women', conference: 'West' },
+  '6a0c982c98c2fd32fc7c1d0d': { name: 'Oregon II', gender: 'Women', conference: 'West' },
+  '6a4e9b904b609600f0e70d42': { name: 'Ozark', gender: 'Women' }, // conference unknown
+  '6a44470e99ca5a7f419d52d3': { name: 'Philly', gender: 'Women', conference: 'East' },
+  '6a4e9b6a801326012116f792': { name: 'Rocky Mountain', gender: 'Women', conference: 'Central' },
+  '6a4e9b6a4b60960121e70967': { name: 'Rocky Mountain II', gender: 'Women', conference: 'Central' },
+  '6a0c982c98c2fd79027c1c4f': { name: 'SoCal', gender: 'Women', conference: 'West' },
+  '6a0c982c8a5826dcee7f909e': { name: 'SoCal II', gender: 'Women', conference: 'West' },
+  '6a4e9b6a80132600f016fa7f': { name: 'Southwest', gender: 'Women', conference: 'Central' },
+  // Not yet in this table at all - no SportsEngine division_id known for
+  // these three, mentioned in the provided conference mapping but never
+  // seen in any team/division export so far:
+  //   Oregon (Men, West Conference)
+  //   Washington (Men, West Conference) - distinct from "Washington DC" above
+  //   West Divide (Women, Central Conference)
 };
 
 const pool = new Pool({
@@ -801,6 +807,8 @@ const server = http.createServer(async (req, res) => {
     try {
       const divisionParam = url.searchParams.get('division');
       const divisions = divisionParam ? divisionParam.split(',').filter(Boolean) : [];
+      const conferenceParam = url.searchParams.get('conference');
+      const conferences = conferenceParam ? conferenceParam.split(',').filter(Boolean) : [];
       const team = url.searchParams.get('team');
       const gender = url.searchParams.get('gender');
       const dateFromParam = url.searchParams.get('dateFrom');
@@ -911,6 +919,10 @@ const server = http.createServer(async (req, res) => {
       // Apply the same filters to the merged set, regardless of whether a
       // report exists for a given game.
       if (divisions.length > 0) mergedRows = mergedRows.filter(r => divisions.includes(r.division_id));
+      if (conferences.length > 0) mergedRows = mergedRows.filter(r => {
+        const info = r.division_id ? DIVISION_LOOKUP[r.division_id] : null;
+        return info && conferences.includes(info.conference);
+      });
       if (gender) mergedRows = mergedRows.filter(r => r.gender === gender);
       if (team) mergedRows = mergedRows.filter(r => r.team1_id === team || r.team2_id === team);
 

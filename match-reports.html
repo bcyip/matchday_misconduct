@@ -40,6 +40,14 @@
   <div class="card">
     <div class="filters">
       <div class="field">
+        <label for="conferenceFilter">Conference</label>
+        <select id="conferenceFilter" multiple size="3" style="min-width:110px; padding:6px; border:1px solid var(--border); border-radius:6px; font-size:13px;">
+          <option value="West">West</option>
+          <option value="Central">Central</option>
+          <option value="East">East</option>
+        </select>
+      </div>
+      <div class="field">
         <label for="divisionFilterBtn">Division</label>
         <button type="button" id="divisionFilterBtn" onclick="toggleDivisionDropdown()" style="text-align:left; min-width:140px; padding:8px 10px; border:1px solid var(--border); border-radius:6px; font-size:13.5px; background:#fff; cursor:pointer;">All Divisions</button>
         <div id="divisionDropdown" style="display:none; position:absolute; z-index:10; background:#fff; border:1px solid var(--border); border-radius:8px; padding:10px; margin-top:4px; max-height:280px; overflow-y:auto; box-shadow:0 4px 12px rgba(0,0,0,0.1);"></div>
@@ -216,6 +224,8 @@
     const dateFrom = document.getElementById('dateFrom').value;
     const dateTo = document.getElementById('dateTo').value;
     if (selectedDivisionIds.size > 0) params.set('division', [...selectedDivisionIds].join(','));
+    const selectedConferences = [...document.getElementById('conferenceFilter').selectedOptions].map(o => o.value);
+    if (selectedConferences.length > 0) params.set('conference', selectedConferences.join(','));
     if (team) params.set('team', team);
     if (gender) params.set('gender', gender);
     if (dateFrom) params.set('dateFrom', dateFrom);
