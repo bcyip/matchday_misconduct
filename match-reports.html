@@ -3,302 +3,427 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>USCCS Admin Console — Misconduct Review</title>
+  <title>USCCS Admin Console — Match Reports</title>
   <style>
-    :root {
-      --navy: #11213F; --blue: #6BC4E8; --gold: #E7C247;
-      --bg: #F4F6FA; --border: #E1E5EC; --gray: #5A6472; --danger: #C0392B; --success: #1F7A4D;
-    }
-    * { box-sizing: border-box; }
-    body { font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; background: var(--bg); margin: 0; color: #1a1a1a; }
-    header { background: var(--navy); color: var(--gold); padding: 14px 24px; font-weight: 700; font-size: 17px; display: flex; justify-content: space-between; align-items: center; }
-    header .who { color: #fff; font-size: 13px; font-weight: 400; }
-    header .who a { color: var(--blue); margin-left: 12px; text-decoration: none; }
-    main { max-width: 1100px; margin: 0 auto; padding: 24px; }
+    :root { --navy: #11213F; --gold: #E7C247; --bg: #F4F6FA; --border: #E1E5EC; --gray: #5A6472; --danger: #C0392B; }
+    body { font-family: -apple-system, sans-serif; background: var(--bg); margin: 0; color: #1a1a1a; }
+    header { background: var(--navy); color: var(--gold); padding: 14px 20px; font-weight: 700; font-size: 17px; display: flex; align-items: center; justify-content: space-between; }
+    header a { color: #6BC4E8; text-decoration: none; font-size: 13px; font-weight: 600; }
+    main { max-width: 1200px; margin: 0 auto; padding: 24px; }
     .card { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 18px; }
     .muted { color: var(--gray); font-size: 13px; }
-    .err { color: var(--danger); font-size: 13px; }
-
-    .filters { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
-    .field label { display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--gray); margin-bottom: 4px; }
-    .field input, .field select { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
-    .checkbox-field { display: flex; align-items: center; gap: 6px; padding-bottom: 8px; }
-
-    table { width: 100%; border-collapse: collapse; }
-    th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--gray); padding: 8px 10px; border-bottom: 2px solid var(--border); }
-    td { padding: 10px; border-bottom: 1px solid var(--border); font-size: 14px; vertical-align: top; }
-    tr.incident-row { cursor: pointer; }
-    tr.incident-row:hover { background: #F9FAFC; }
-
-    .badge { display: inline-block; padding: 3px 10px; border-radius: 10px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .02em; }
-    .badge-pending { background: #EEF1F8; color: var(--gray); }
-    .badge-reviewed { background: #E9F6EE; color: var(--success); }
-
-    .status-legend { display: flex; flex-wrap: wrap; gap: 16px; padding-bottom: 14px; margin-bottom: 14px; border-bottom: 1px solid var(--border); }
-    .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--gray); }
-
-    .detail-panel { padding: 16px; background: var(--bg); border-radius: 8px; margin: 4px 0 14px; }
-    .detail-panel .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 12px; }
-    .detail-panel textarea, .detail-panel select { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; font-family: inherit; }
-    .detail-panel textarea { min-height: 70px; }
-    .detail-panel .section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--gray); margin: 10px 0 4px; }
-
-    button { padding: 8px 16px; border-radius: 6px; border: none; background: var(--navy); color: #fff; font-weight: 600; cursor: pointer; font-size: 13.5px; }
-    button:hover { opacity: .9; }
-    button:disabled { opacity: .5; cursor: not-allowed; }
+    .filters { display: flex; flex-wrap: wrap; gap: 14px; align-items: end; }
+    .field { display: flex; flex-direction: column; gap: 4px; position: relative; }
+    .field label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--gray); }
+    .field select, .field input { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13.5px; min-width: 140px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th { text-align: left; font-size: 11px; text-transform: uppercase; color: var(--gray); padding: 8px; border-bottom: 2px solid var(--border); white-space: nowrap; }
+    td { padding: 8px; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+    .card-count { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 700; margin-left: 4px; }
+    .push-score-btn { padding: 5px 10px; font-size: 11.5px; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--navy); cursor: pointer; white-space: nowrap; }
+    .push-score-btn:hover:not(:disabled) { background: var(--bg); }
+    .push-score-btn:disabled { opacity: .5; cursor: not-allowed; }
+    .yc-count { background: #FDF0DD; color: #8A6210; }
+    .rc-count { background: #FBEAE8; color: var(--danger); }
+    .err-box { background: #FBEAE8; color: var(--danger); padding: 10px 14px; border-radius: 6px; margin-top: 10px; font-size: 13px; }
   </style>
 </head>
 <body>
-
 <header>
-  USCCS Admin Console — Misconduct Review
+  USCCS Admin Console — Match Reports
   <span style="display:flex; align-items:center; gap:16px;">
-    <a href="/match-reports">Match Reports</a>
-    <span class="who" id="whoDisplay"></span>
+    <a href="/">← Misconduct Review</a>
+    <a href="/oauth/logout">Log out</a>
   </span>
 </header>
-
 <main>
   <div class="card">
     <div class="filters">
-      <div class="checkbox-field">
-        <input type="checkbox" id="includeRed" checked onchange="loadMisconduct()" />
-        <label for="includeRed" style="margin:0; text-transform:none; font-weight:400; color:#1a1a1a; font-size:14px;">Red Cards</label>
-      </div>
-      <div class="checkbox-field">
-        <input type="checkbox" id="includeYellow" onchange="loadMisconduct()" />
-        <label for="includeYellow" style="margin:0; text-transform:none; font-weight:400; color:#1a1a1a; font-size:14px;">Yellow Cards</label>
-      </div>
-      <div class="checkbox-field">
-        <input type="checkbox" id="includeIncidentReports" checked onchange="loadMisconduct()" />
-        <label for="includeIncidentReports" style="margin:0; text-transform:none; font-weight:400; color:#1a1a1a; font-size:14px;">Incident Reports</label>
+      <div class="field">
+        <label for="divisionFilterBtn">Division</label>
+        <button type="button" id="divisionFilterBtn" onclick="toggleDivisionDropdown()" style="text-align:left; min-width:140px; padding:8px 10px; border:1px solid var(--border); border-radius:6px; font-size:13.5px; background:#fff; cursor:pointer;">All Divisions</button>
+        <div id="divisionDropdown" style="display:none; position:absolute; z-index:10; background:#fff; border:1px solid var(--border); border-radius:8px; padding:10px; margin-top:4px; max-height:280px; overflow-y:auto; box-shadow:0 4px 12px rgba(0,0,0,0.1);"></div>
       </div>
       <div class="field">
         <label for="teamFilter">Team</label>
-        <select id="teamFilter" onchange="loadMisconduct()">
+        <select id="teamFilter" >
           <option value="">All Teams</option>
         </select>
       </div>
       <div class="field">
-        <label for="playerFilter">Player Name</label>
-        <input type="text" id="playerFilter" placeholder="Search..." oninput="debouncedLoad()" />
+        <label for="genderFilter">Gender</label>
+        <select id="genderFilter" >
+          <option value="">All</option>
+          <option value="Men">Men</option>
+          <option value="Women">Women</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="reportStatusFilter">Show</label>
+        <select id="reportStatusFilter" onchange="applyReportFilterAndRender()">
+          <option value="all">All Games</option>
+          <option value="has_report">Has Report</option>
+          <option value="missing_report">Missing Report (Beta)</option>
+          <option value="no_report_registered">No Report</option>
+        </select>
       </div>
       <div class="field">
         <label for="dateFrom">From</label>
-        <input type="date" id="dateFrom" onchange="loadMisconduct()" />
+        <input type="date" id="dateFrom"  />
       </div>
       <div class="field">
         <label for="dateTo">To</label>
-        <input type="date" id="dateTo" onchange="loadMisconduct()" />
+        <input type="date" id="dateTo"  />
+      </div>
+      <div class="field">
+        <label style="visibility:hidden;">.</label>
+        <button type="button" onclick="loadReports()" style="padding:9px 20px; background:var(--navy); color:#fff; border:none; border-radius:6px; font-size:13.5px; font-weight:600; cursor:pointer;">Load Reports</button>
       </div>
     </div>
   </div>
 
-  <div class="card">
-    <div class="status-legend">
-      <div class="legend-item"><span class="badge badge-pending">pending</span> Standard suspension applied automatically — not yet reviewed by committee.</div>
-      <div class="legend-item"><span class="badge badge-reviewed">reviewed</span> Committee has reviewed — standard suspension confirmed, reduced, or increased.</div>
+  <div class="card" style="background:#F4F9FD; border-color:#6BC4E8;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;">
+      <div>
+        <strong style="font-size:13.5px;">Historical Games Cache</strong>
+        <p class="muted" style="margin:2px 0 0;">Past games shown above come from a local cache, not a live fetch every time. Sync the last 4 days by default, or pick one specific date below.</p>
+      </div>
+      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <div style="display:flex; align-items:center; gap:6px;">
+          <label for="syncSingleDate" style="font-size:12.5px; font-weight:600; color:var(--gray); text-transform:uppercase; letter-spacing:0.03em;">Single date</label>
+          <input type="date" id="syncSingleDate" style="padding:7px 9px; border:1px solid var(--border); border-radius:6px; font-size:13px;" />
+        </div>
+        <button type="button" onclick="syncSchedule()" id="syncBtn" class="push-score-btn" style="white-space:nowrap;">Sync Historical Games</button>
+      </div>
     </div>
-    <div id="resultsMeta" class="muted" style="margin-bottom:10px;"></div>
-    <table>
-      <thead>
-        <tr>
-          <th>Game Date</th>
-          <th>Team</th>
-          <th>Player</th>
-          <th>Type</th>
-          <th>Reason</th>
-          <th>Games</th>
-          <th>Served</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody id="resultsBody"></tbody>
-    </table>
+    <div id="syncResult" style="margin-top:8px; font-size:13px;"></div>
+  </div>
+
+  <div class="card">
+    <div id="summaryStats" class="muted" style="margin-bottom:10px; font-size:13.5px;"></div>
+    <div id="reportsBox"><p class="muted">Loading...</p></div>
   </div>
 </main>
-
 <script>
-  let misconductData = [];
-  let expandedEntryId = null;
-  let debounceTimer = null;
+  let selectedDivisionIds = new Set(); // multi-select state for the division filter
+  let lastLoadedReports = []; // the most recent server response - "Only show games with a report" filters THIS client-side, no re-fetch
 
-  function debouncedLoad() {
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(loadMisconduct, 350);
-  }
-
-  async function init() {
-    try {
-      const whoRes = await fetch('/api/whoami');
-      if (whoRes.status === 401) { window.location.href = '/oauth/login'; return; }
-      const who = await whoRes.json();
-      document.getElementById('whoDisplay').innerHTML =
-        escapeHtml(who.name) + ' <a href="/oauth/logout">Log out</a>';
-
-      await loadTeams();
-      await loadMisconduct();
-    } catch (e) {
-      document.getElementById('resultsMeta').innerHTML = '<span class="err">Failed to load: ' + escapeHtml(e.message) + '</span>';
-    }
-  }
-
-  async function loadTeams() {
-    const res = await fetch('/api/misconduct/teams');
+  async function loadFilterOptions() {
+    const res = await fetch('/api/match-reports/filter-options');
     const data = await res.json();
-    const select = document.getElementById('teamFilter');
+    if (!res.ok) return;
+
+    const dropdown = document.getElementById('divisionDropdown');
+    dropdown.innerHTML = (data.divisions || []).map(d => `
+      <label style="display:flex; align-items:center; gap:6px; padding:4px 2px; font-size:13px; white-space:nowrap; cursor:pointer;">
+        <input type="checkbox" value="${escapeHtml(d.division_id)}" onchange="onDivisionCheckboxChange(this)" />
+        ${escapeHtml(d.division_name)}${d.gender ? ' <span class="muted">(' + escapeHtml(d.gender) + ')</span>' : ''}
+      </label>
+    `).join('');
+
+    const teamSelect = document.getElementById('teamFilter');
     (data.teams || []).forEach(t => {
       const opt = document.createElement('option');
       opt.value = t.team_id;
       opt.textContent = t.team_name;
-      select.appendChild(opt);
+      teamSelect.appendChild(opt);
     });
   }
 
-  async function loadMisconduct() {
-    const params = new URLSearchParams();
-    params.set('includeRed', document.getElementById('includeRed').checked ? 'true' : 'false');
-    params.set('includeYellow', document.getElementById('includeYellow').checked ? 'true' : 'false');
-    params.set('includeIncidentReports', document.getElementById('includeIncidentReports').checked ? 'true' : 'false');
-    const teamId = document.getElementById('teamFilter').value;
-    if (teamId) params.set('teamId', teamId);
-    const playerName = document.getElementById('playerFilter').value.trim();
-    if (playerName) params.set('playerName', playerName);
-    const dateFrom = document.getElementById('dateFrom').value;
-    if (dateFrom) params.set('dateFrom', dateFrom);
-    const dateTo = document.getElementById('dateTo').value;
-    if (dateTo) params.set('dateTo', dateTo);
-
-    const res = await fetch('/api/misconduct?' + params.toString());
-    const data = await res.json();
-    misconductData = data.misconduct || [];
-    expandedEntryId = null;
-    renderResults();
+  function toggleDivisionDropdown() {
+    const dropdown = document.getElementById('divisionDropdown');
+    dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
   }
 
-  function renderResults() {
-    const tbody = document.getElementById('resultsBody');
-    document.getElementById('resultsMeta').textContent = misconductData.length + ' incident(s) found';
-
-    if (!misconductData.length) {
-      tbody.innerHTML = '<tr><td colspan="8" class="muted">No misconduct matches these filters.</td></tr>';
-      return;
+  // Close the dropdown when clicking anywhere outside it
+  document.addEventListener('click', (e) => {
+    const dropdown = document.getElementById('divisionDropdown');
+    const btn = document.getElementById('divisionFilterBtn');
+    if (dropdown && !dropdown.contains(e.target) && e.target !== btn) {
+      dropdown.style.display = 'none';
     }
+  });
 
-    tbody.innerHTML = misconductData.map(row => {
-      const dateStr = row.game_date ? new Date(row.game_date).toLocaleDateString('en-US', { timeZone: 'America/New_York' }) : '—';
-      const isReport = row.event_type === 'Report';
-      const rowHtml = `
-        <tr class="incident-row" onclick="toggleDetail('${row.entry_id}')">
-          <td>${dateStr}</td>
-          <td>${escapeHtml(row.team_name)}</td>
-          <td>${isReport ? escapeHtml(row.name || '—') : escapeHtml(row.name) + (row.person_type === 'staff' ? ' <span class="muted">(staff)</span>' : '')}</td>
-          <td>${isReport ? '📄 Report' : (row.event_type === 'Red Card' ? '🟥' : '🟨') + ' ' + row.event_type}</td>
-          <td>${escapeHtml(row.reason || '—')}</td>
-          <td>${isReport ? '—' : (row.event_type === 'Red Card'
-            ? `${row.games_suspended != null ? row.games_suspended : row.standard_games}${row.games_suspended != null && row.games_suspended !== row.standard_games ? ' <span class="muted">(std: ' + row.standard_games + ')</span>' : ''}`
-            : '—')}</td>
-          <td>${isReport ? '—' : (row.event_type === 'Red Card' && row.games_served != null
-            ? `${row.games_served}${row.games_served >= (row.games_suspended != null ? row.games_suspended : row.standard_games) ? ' <span style="color:var(--success, #1F7A4D);">✓</span>' : ''}`
-            : '—')}</td>
-          <td>${isReport ? '' : `<span class="badge badge-${row.status}">${row.status.replace('_', ' ')}</span>`}</td>
-        </tr>
-      `;
-      const detailHtml = String(expandedEntryId) === String(row.entry_id)
-        ? `<tr><td colspan="8">${isReport ? renderIncidentReportPanel(row) : renderDetailPanel(row)}</td></tr>`
-        : '';
-      return rowHtml + detailHtml;
-    }).join('');
+  function onDivisionCheckboxChange(checkbox) {
+    if (checkbox.checked) selectedDivisionIds.add(checkbox.value);
+    else selectedDivisionIds.delete(checkbox.value);
+
+    const btn = document.getElementById('divisionFilterBtn');
+    btn.textContent = selectedDivisionIds.size === 0
+      ? 'All Divisions'
+      : selectedDivisionIds.size + ' division' + (selectedDivisionIds.size === 1 ? '' : 's') + ' selected';
   }
 
-  function toggleDetail(entryId) {
-    expandedEntryId = expandedEntryId === entryId ? null : entryId;
-    renderResults();
-  }
+  async function syncSchedule() {
+    const btn = document.getElementById('syncBtn');
+    const resultEl = document.getElementById('syncResult');
+    const singleDate = document.getElementById('syncSingleDate').value;
+    // A single date takes priority over the shared From/To range inputs -
+    // syncing just one specific day means dateFrom = dateTo = that day.
+    const dateFrom = singleDate || document.getElementById('dateFrom').value;
+    const dateTo = singleDate || document.getElementById('dateTo').value;
 
-  // Incident reports have no review workflow (no real entry_id tied to
-  // misconduct_reviews/suspensions) - just show the report text, read-only.
-  function renderIncidentReportPanel(row) {
-    return `
-      <div class="detail-panel">
-        <div class="section-label" style="margin-top:0;">Incident Report</div>
-        <p style="white-space:pre-wrap; margin:0;">${escapeHtml(row.incident_report)}</p>
-      </div>
-    `;
-  }
-
-  function renderDetailPanel(row) {
-    const hasSuspension = row.event_type === 'Red Card';
-    const currentGames = row.games_suspended != null ? row.games_suspended : row.standard_games;
-
-    return `
-      <div class="detail-panel">
-        ${row.supplemental_report ? `
-          <div class="section-label">Supplemental Report</div>
-          <p style="white-space:pre-wrap; margin:0 0 10px;">${escapeHtml(row.supplemental_report)}</p>
-        ` : ''}
-        ${row.reviewed_by ? `<p class="muted" style="margin:0 0 10px;">Last reviewed by ${escapeHtml(row.reviewed_by)} on ${new Date(row.reviewed_at).toLocaleString()}</p>` : ''}
-
-        <div class="row2">
-          <div>
-            <div class="section-label">Status</div>
-            <select id="statusInput-${row.entry_id}">
-              <option value="pending" ${row.status === 'pending' ? 'selected' : ''}>Pending</option>
-              <option value="reviewed" ${row.status === 'reviewed' ? 'selected' : ''}>Reviewed</option>
-            </select>
-          </div>
-          ${hasSuspension ? `
-            <div>
-              <div class="section-label">Games Suspended <span class="muted" style="text-transform:none; font-weight:400;">(standard: ${row.standard_games})</span></div>
-              <input type="number" inputmode="numeric" min="0" id="gamesInput-${row.entry_id}" value="${currentGames}" style="width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:6px; font-size:14px;" />
-            </div>
-          ` : `<div class="muted" style="align-self:flex-end; padding-bottom:8px;">No suspension applies (Yellow Card).</div>`}
-        </div>
-
-        <div class="section-label">Committee Notes</div>
-        <textarea id="notesInput-${row.entry_id}" placeholder="Internal notes...">${escapeHtml(row.committee_notes || '')}</textarea>
-
-        <div style="margin-top:12px; display:flex; align-items:center; gap:10px;">
-          <button onclick="saveReview(${row.entry_id}, ${hasSuspension})">Save</button>
-          <span id="saveResult-${row.entry_id}" class="muted"></span>
-        </div>
-      </div>
-    `;
-  }
-
-  async function saveReview(entryId, hasSuspension) {
-    const resultEl = document.getElementById('saveResult-' + entryId);
-    resultEl.textContent = 'Saving...';
-
-    const status = document.getElementById('statusInput-' + entryId).value;
-    const committeeNotes = document.getElementById('notesInput-' + entryId).value.trim();
-    const gamesSuspended = hasSuspension ? document.getElementById('gamesInput-' + entryId).value.trim() : undefined;
-
+    btn.disabled = true;
+    btn.textContent = 'Syncing...';
+    resultEl.innerHTML = '';
     try {
-      const res = await fetch('/api/misconduct/' + entryId + '/review', {
+      const res = await fetch('/api/match-reports/sync-schedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status, committeeNotes, gamesSuspended }),
+        body: JSON.stringify({ dateFrom: dateFrom || undefined, dateTo: dateTo || undefined }),
       });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Unknown error');
+      resultEl.innerHTML = `<span style="color:var(--success, #1F7A4D);">Synced ${data.syncedCount} game(s)${data.autoFlaggedCount > 0 ? ` - ${data.autoFlaggedCount} auto-flagged as "MO report received" (score already in SportsEngine)` : ''}.</span>`;
+    } catch (e) {
+      resultEl.innerHTML = '<span style="color:var(--danger);">Sync failed: ' + escapeHtml(e.message) + '</span>';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Sync Historical Games';
+    }
+  }
+
+  // Purely client-side - filters the already-loaded data, no re-fetch.
+  function applyReportFilterAndRender() {
+    const status = document.getElementById('reportStatusFilter').value;
+    let filtered = lastLoadedReports;
+    if (status === 'has_report') filtered = lastLoadedReports.filter(r => r.has_report);
+    else if (status === 'missing_report') filtered = lastLoadedReports.filter(r => !r.has_report);
+    else if (status === 'no_report_registered') filtered = lastLoadedReports.filter(r => !r.has_report && !r.flagged_external);
+    renderSummaryStats();
+    renderReports(filtered);
+  }
+
+  // Summary counts are always over the FULL loaded set, regardless of
+  // which filter is currently applied - so the numbers stay stable as a
+  // reference point while browsing different filtered views.
+  function renderSummaryStats() {
+    const totalGames = lastLoadedReports.length;
+    const missingReport = lastLoadedReports.filter(r => !r.has_report).length;
+    const noReportRegistered = lastLoadedReports.filter(r => !r.has_report && !r.flagged_external).length;
+    document.getElementById('summaryStats').innerHTML = `
+      <strong>${totalGames}</strong> total games &nbsp;·&nbsp;
+      <strong>${missingReport}</strong> missing report (beta) &nbsp;·&nbsp;
+      <strong>${noReportRegistered}</strong> no report
+    `;
+  }
+
+  async function loadReports() {
+    const box = document.getElementById('reportsBox');
+    const params = new URLSearchParams();
+    const team = document.getElementById('teamFilter').value;
+    const gender = document.getElementById('genderFilter').value;
+    const dateFrom = document.getElementById('dateFrom').value;
+    const dateTo = document.getElementById('dateTo').value;
+    if (selectedDivisionIds.size > 0) params.set('division', [...selectedDivisionIds].join(','));
+    if (team) params.set('team', team);
+    if (gender) params.set('gender', gender);
+    if (dateFrom) params.set('dateFrom', dateFrom);
+    if (dateTo) params.set('dateTo', dateTo);
+    try {
+      const res = await fetch('/api/match-reports?' + params.toString());
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Unknown error');
+      lastLoadedReports = data.reports || [];
+      applyReportFilterAndRender();
+    } catch (e) {
+      box.innerHTML = '<div class="err-box">Failed to load: ' + escapeHtml(e.message) + '</div>';
+    }
+  }
+
+  function cardCount(count, colorClass) {
+    if (!count || count <= 0) return ''; // blank, not "0" - keeps zero-card games uncluttered
+    return `<span class="card-count ${colorClass}">${count}</span>`;
+  }
+
+  function renderReports(reports) {
+    const box = document.getElementById('reportsBox');
+    if (!reports.length) {
+      box.innerHTML = '<p class="muted">No games match these filters.</p>';
+      return;
+    }
+    box.innerHTML = `
+      <div style="overflow-x:auto;">
+      <table>
+        <thead><tr>
+          <th>Match Report</th><th>Game Date</th><th>Gender</th><th>Division</th>
+          <th style="text-align:right;">Team 1</th><th style="text-align:center;">YC</th><th style="text-align:center;">RC</th>
+          <th style="text-align:center;">Score</th>
+          <th style="text-align:center;">RC</th><th style="text-align:center;">YC</th><th>Team 2</th><th>Actions</th>
+        </tr></thead>
+        <tbody>
+          ${reports.map(r => {
+            const rowStyle = r.is_forfeit ? ' style="background:#F4F6FA;"'
+              : !r.has_report ? (r.flagged_external ? ' style="background:#FDF0DD;"' : ' style="background:#FBEAE8;"')
+              : '';
+            const reasonLabel = r.forfeit_reason
+              ? r.forfeit_reason.charAt(0).toUpperCase() + r.forfeit_reason.slice(1)
+              : null;
+            return `
+            <tr${rowStyle}>
+              <td style="font-size:11.5px; white-space:nowrap;">${r.game_id ? `<a href="https://octopus-app-ilp92.ondigitalocean.app/?game=${encodeURIComponent(r.game_id)}" target="_blank" rel="noopener" style="color:var(--navy);">Match Report URL</a>` : '—'}</td>
+              <td>${r.game_date ? new Date(r.game_date).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short' }) + ' ET' : '—'}</td>
+              <td>${escapeHtml(r.gender || '')}</td>
+              <td>${escapeHtml(r.division_name || '')}</td>
+              <td style="text-align:right;">${escapeHtml(r.team1_name)}</td>
+              <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team1_yellow_count, 'yc-count')}</td>
+              <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team1_red_count, 'rc-count')}</td>
+              <td style="text-align:center; font-weight:700; white-space:nowrap;">${
+                r.is_forfeit ? escapeHtml(reasonLabel)
+                : r.has_report ? r.team1_score + ' - ' + r.team2_score
+                : (r.se_home_score != null && r.se_away_score != null)
+                  ? `<span style="background:#FFF6D6; padding:2px 6px; border-radius:4px;">${escapeHtml(r.se_home_score)} - ${escapeHtml(r.se_away_score)}</span><div class="muted" style="font-weight:400; font-size:10px; margin-top:2px;">(from SE/MO)</div>`
+                  : '—'
+              }</td>
+              <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team2_red_count, 'rc-count')}</td>
+              <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team2_yellow_count, 'yc-count')}</td>
+              <td>${escapeHtml(r.team2_name)}</td>
+              <td>
+                ${r.is_forfeit ? `
+                  <select onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.value)" style="font-size:11.5px; padding:3px 5px; border:1px solid var(--border); border-radius:5px;">
+                    <option value="forfeit" ${r.forfeit_reason === 'forfeit' ? 'selected' : ''}>Forfeit</option>
+                    <option value="postponed" ${r.forfeit_reason === 'postponed' ? 'selected' : ''}>Postponed</option>
+                    <option value="rainout" ${r.forfeit_reason === 'rainout' ? 'selected' : ''}>Rainout</option>
+                    <option value="">— Clear —</option>
+                  </select>
+                  <div style="margin-top:5px; display:flex; align-items:center; gap:5px; font-size:11.5px;">
+                    <span class="muted">Pay ref?</span>
+                    <select onchange="setRefereePaid('${escapeJs(r.game_id)}', this.value)" style="font-size:11.5px; padding:2px 4px; border:1px solid var(--border); border-radius:5px;">
+                      <option value="" ${r.referee_paid == null ? 'selected' : ''}>—</option>
+                      <option value="true" ${r.referee_paid === true ? 'selected' : ''}>Yes</option>
+                      <option value="false" ${r.referee_paid === false ? 'selected' : ''}>No</option>
+                    </select>
+                  </div>
+                ` : r.has_report ? `
+                  <button class="push-score-btn" onclick="pushScore('${escapeJs(r.game_id)}', this)">Push Score to SE</button>
+                  <span class="push-score-result" style="display:block; font-size:11px; margin-top:3px;"></span>
+                  ${r.incident_report ? `<button class="push-score-btn" style="margin-top:4px;" onclick="toggleIncidentReport('${escapeJs(r.game_id)}')">View Incident Report</button>` : ''}
+                ` : `
+                  <span class="muted" style="font-size:12px; display:block;">No report yet</span>
+                  <label style="display:flex; align-items:center; gap:5px; font-size:11.5px; font-weight:400; margin-top:4px; cursor:pointer;">
+                    <input type="checkbox" ${r.flagged_external ? 'checked' : ''} onchange="toggleExternalFlag('${escapeJs(r.game_id)}', this.checked)" />
+                    MO report received
+                  </label>
+                  <select onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.value)" style="font-size:11.5px; padding:3px 5px; margin-top:4px; border:1px solid var(--border); border-radius:5px;">
+                    <option value="" selected>Forfeit/Postponed/Rainout?</option>
+                    <option value="forfeit">Forfeit</option>
+                    <option value="postponed">Postponed</option>
+                    <option value="rainout">Rainout</option>
+                  </select>
+                `}
+              </td>
+            </tr>
+            ${r.incident_report ? `
+            <tr id="incident-row-${escapeJs(r.game_id)}" style="display:none;">
+              <td colspan="12" style="background:var(--bg); font-size:13px;">
+                <strong>Incident Report:</strong>
+                <div style="white-space:pre-wrap; margin-top:4px;">${escapeHtml(r.incident_report)}</div>
+              </td>
+            </tr>
+            ` : ''}
+          `;
+          }).join('')}
+        </tbody>
+      </table>
+      </div>
+    `;
+  }
+
+  function escapeJs(str) {
+    // Backslash, then single quote (JS string delimiter), then double
+    // quote as an HTML entity (every onclick here sits inside a
+    // double-quoted HTML attribute) - same fix applied to matchday after
+    // a real production crash there, applied here defensively even though
+    // game_id (a UUID) is unlikely to ever contain a quote.
+    return String(str).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+  }
+
+  async function toggleExternalFlag(gameId, flagged) {
+    try {
+      const res = await fetch('/api/match-reports/' + encodeURIComponent(gameId) + '/flag-external', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ flagged }),
+      });
+      if (!res.ok) throw new Error('Failed to save');
+      loadReports(); // reload so the row's highlight color updates too
+    } catch (e) {
+      alert('Failed to update: ' + e.message);
+      loadReports(); // reload to reflect the actual (unchanged) state
+    }
+  }
+
+  async function toggleForfeitFlag(gameId, reason) {
+    try {
+      const res = await fetch('/api/match-reports/' + encodeURIComponent(gameId) + '/flag-forfeit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: reason || null }),
+      });
+      if (!res.ok) throw new Error('Failed to save');
+      loadReports(); // reload so the row's display (score column, actions) updates too
+    } catch (e) {
+      alert('Failed to update: ' + e.message);
+      loadReports();
+    }
+  }
+
+  async function setRefereePaid(gameId, value) {
+    const refereePaid = value === 'true' ? true : value === 'false' ? false : null;
+    try {
+      const res = await fetch('/api/match-reports/' + encodeURIComponent(gameId) + '/set-referee-paid', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refereePaid }),
+      });
+      if (!res.ok) throw new Error('Failed to save');
+      loadReports();
+    } catch (e) {
+      alert('Failed to update: ' + e.message);
+      loadReports();
+    }
+  }
+
+  function toggleIncidentReport(gameId) {
+    const row = document.getElementById('incident-row-' + gameId);
+    row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
+  }
+
+  async function pushScore(gameId, buttonEl) {
+    const resultEl = buttonEl.nextElementSibling;
+    buttonEl.disabled = true;
+    buttonEl.textContent = 'Pushing...';
+    resultEl.textContent = '';
+
+    try {
+      const res = await fetch('/api/match-reports/' + encodeURIComponent(gameId) + '/push-score', { method: 'POST' });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || 'Unknown error');
 
-      resultEl.textContent = json.suspensionUpdated
-        ? `Saved. Suspension now: ${json.gamesSuspended} game(s).`
-        : 'Saved.';
-      await loadMisconduct(); // refresh so the badge/status reflects the change
-      expandedEntryId = entryId;
-      renderResults();
+      if (json.scoreUpdated) {
+        resultEl.textContent = '✓ Pushed successfully';
+        resultEl.style.color = 'var(--success, #1F7A4D)';
+        buttonEl.style.display = 'none';
+      } else {
+        resultEl.textContent = 'Failed: ' + (json.scoreError || 'unknown error');
+        resultEl.style.color = 'var(--danger)';
+        buttonEl.disabled = false;
+        buttonEl.textContent = 'Push Score to SE';
+      }
     } catch (e) {
-      resultEl.innerHTML = '<span class="err">Failed: ' + escapeHtml(e.message) + '</span>';
+      resultEl.textContent = 'Failed: ' + e.message;
+      resultEl.style.color = 'var(--danger)';
+      buttonEl.disabled = false;
+      buttonEl.textContent = 'Push Score to SE';
     }
   }
 
   function escapeHtml(str) {
-    return String(str == null ? '' : str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    return String(str == null ? '' : str).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
   }
 
-  init();
+  loadFilterOptions();
+  loadReports();
 </script>
 </body>
 </html>
