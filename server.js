@@ -821,9 +821,9 @@ const server = http.createServer(async (req, res) => {
 
       const [flaggedResult, forfeitResult] = await Promise.all([
         pool.query('SELECT game_id FROM external_report_flags'),
-        pool.query('SELECT game_id, reason FROM forfeit_flags'),
+        pool.query('SELECT game_id, reason, referee_paid FROM forfeit_flags'),
       ]);
-      const forfeitReasonByGameId = new Map(forfeitResult.rows.map(r => [r.game_id, r.reason]));
+      const forfeitInfoByGameId = new Map(forfeitResult.rows.map(r => [r.game_id, { reason: r.reason, referee_paid: r.referee_paid }]));
       const flaggedIds = new Set(flaggedResult.rows.map(r => r.game_id));
 
       let mergedRows;
@@ -884,7 +884,8 @@ const server = http.createServer(async (req, res) => {
       });
 
       let reports = mergedRows.map(r => {
-        const forfeitReason = forfeitReasonByGameId.get(r.game_id) || null;
+        const forfeitInfo = forfeitInfoByGameId.get(r.game_id) || null;
+        const forfeitReason = forfeitInfo ? forfeitInfo.reason : null;
         const isForfeit = forfeitReason != null;
         return {
           ...r,
@@ -892,6 +893,7 @@ const server = http.createServer(async (req, res) => {
           flagged_external: flaggedIds.has(r.game_id),
           is_forfeit: isForfeit,
           forfeit_reason: forfeitReason, // 'forfeit' | 'postponed' | 'rainout' | null
+          referee_paid: forfeitInfo ? forfeitInfo.referee_paid : null, // true | false | null (undecided)
           // A forfeit/postponed/rainout counts as "entered" even with no
           // real score data - there's nothing more to report for it.
           has_report: r.team1_score != null || r.team2_score != null || isForfeit,
@@ -997,6 +999,50 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ success: true }));
       } catch (err) {
         console.error('[api/match-reports flag-forfeit] Error:', err.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // POST /api/match-reports/:gameId/set-referee-paid — independent of the
+  // forfeit/postponed/rainout reason itself, since a pay decision can
+  // come at a different time. Body: { refereePaid: true|false|null }.
+  // Only updates a row that already exists (a reason must already be set)
+  // - referee pay status is meaningless without one.
+  const setRefereePaidMatch = url.pathname.match(/^\/api\/match-reports\/([^/]+)\/set-referee-paid$/);
+  if (req.method === 'POST' && setRefereePaidMatch) {
+    const session = await getSession(cookies.admin_session);
+    if (!session) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Not logged in' }));
+    }
+    const gameId = decodeURIComponent(setRefereePaidMatch[1]);
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', async () => {
+      let payload;
+      try {
+        payload = JSON.parse(body);
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'Invalid JSON body' }));
+      }
+      try {
+        const refereePaid = payload.refereePaid === true ? true : payload.refereePaid === false ? false : null;
+        const result = await pool.query(
+          'UPDATE forfeit_flags SET referee_paid = $1 WHERE game_id = $2',
+          [refereePaid, gameId]
+        );
+        if (result.rowCount === 0) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'No forfeit/postponed/rainout reason set for this game yet.' }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      } catch (err) {
+        console.error('[api/match-reports set-referee-paid] Error:', err.message);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: err.message }));
       }

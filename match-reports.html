@@ -282,6 +282,14 @@
                     <option value="rainout" ${r.forfeit_reason === 'rainout' ? 'selected' : ''}>Rainout</option>
                     <option value="">— Clear —</option>
                   </select>
+                  <div style="margin-top:5px; display:flex; align-items:center; gap:5px; font-size:11.5px;">
+                    <span class="muted">Pay ref?</span>
+                    <select onchange="setRefereePaid('${escapeJs(r.game_id)}', this.value)" style="font-size:11.5px; padding:2px 4px; border:1px solid var(--border); border-radius:5px;">
+                      <option value="" ${r.referee_paid == null ? 'selected' : ''}>—</option>
+                      <option value="true" ${r.referee_paid === true ? 'selected' : ''}>Yes</option>
+                      <option value="false" ${r.referee_paid === false ? 'selected' : ''}>No</option>
+                    </select>
+                  </div>
                 ` : r.has_report ? `
                   <button class="push-score-btn" onclick="pushScore('${escapeJs(r.game_id)}', this)">Push Score to SE</button>
                   <span class="push-score-result" style="display:block; font-size:11px; margin-top:3px;"></span>
@@ -350,6 +358,22 @@
       });
       if (!res.ok) throw new Error('Failed to save');
       loadReports(); // reload so the row's display (score column, actions) updates too
+    } catch (e) {
+      alert('Failed to update: ' + e.message);
+      loadReports();
+    }
+  }
+
+  async function setRefereePaid(gameId, value) {
+    const refereePaid = value === 'true' ? true : value === 'false' ? false : null;
+    try {
+      const res = await fetch('/api/match-reports/' + encodeURIComponent(gameId) + '/set-referee-paid', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refereePaid }),
+      });
+      if (!res.ok) throw new Error('Failed to save');
+      loadReports();
     } catch (e) {
       alert('Failed to update: ' + e.message);
       loadReports();
