@@ -174,7 +174,7 @@
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Unknown error');
-      resultEl.innerHTML = `<span style="color:var(--success, #1F7A4D);">Synced ${data.syncedCount} game(s).</span>`;
+      resultEl.innerHTML = `<span style="color:var(--success, #1F7A4D);">Synced ${data.syncedCount} game(s)${data.autoFlaggedCount > 0 ? ` - ${data.autoFlaggedCount} auto-flagged as "MO report received" (score already in SportsEngine)` : ''}.</span>`;
     } catch (e) {
       resultEl.innerHTML = '<span style="color:var(--danger);">Sync failed: ' + escapeHtml(e.message) + '</span>';
     } finally {

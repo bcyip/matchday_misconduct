@@ -393,7 +393,7 @@ const SE_EVENTS_QUERY = `
     events(organizationId: $orgId, from: $from, to: $to, calendarEventType: GAME, page: $page, perPage: $perPage) {
       results {
         id
-        eventTeams { name team { id program { primaryName } divisionId } homeTeam }
+        eventTeams { name score team { id program { primaryName } divisionId } homeTeam }
         start
         subvenue { name venueId venueName }
         subvenueId
@@ -439,6 +439,8 @@ function extractGameInfo(event) {
     divisionName: (divisionInfo && divisionInfo.name) || null,
     gender,
     gameStatus: event.gameStatus || null,
+    seHomeScore: (home && home.score) || null,
+    seAwayScore: (away && away.score) || null,
   };
 }
 
@@ -734,22 +736,53 @@ const server = http.createServer(async (req, res) => {
         const pastGames = games.filter(g => g.startTime && new Date(g.startTime) <= endOfTodayEastern);
 
         let syncedCount = 0;
+        const gamesWithSeScore = [];
         for (const g of pastGames) {
           await pool.query(
-            `INSERT INTO schedule_games_cache (game_id, start_time, division_id, gender, location_name, home_team, home_team_id, away_team, away_team_id, game_status, synced_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+            `INSERT INTO schedule_games_cache (game_id, start_time, division_id, gender, location_name, home_team, home_team_id, away_team, away_team_id, game_status, se_home_score, se_away_score, synced_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
              ON CONFLICT (game_id) DO UPDATE SET
                start_time = EXCLUDED.start_time, division_id = EXCLUDED.division_id, gender = EXCLUDED.gender,
                location_name = EXCLUDED.location_name, home_team = EXCLUDED.home_team, home_team_id = EXCLUDED.home_team_id,
                away_team = EXCLUDED.away_team, away_team_id = EXCLUDED.away_team_id, game_status = EXCLUDED.game_status,
+               se_home_score = EXCLUDED.se_home_score, se_away_score = EXCLUDED.se_away_score,
                synced_at = now()`,
-            [g.eventId, g.startTime, g.divisionId, g.gender, g.locationName, g.homeTeam, g.homeTeamId, g.awayTeam, g.awayTeamId, g.gameStatus]
+            [g.eventId, g.startTime, g.divisionId, g.gender, g.locationName, g.homeTeam, g.homeTeamId, g.awayTeam, g.awayTeamId, g.gameStatus, g.seHomeScore, g.seAwayScore]
           );
           syncedCount++;
+          // SportsEngine itself has a score filled in - a strong signal a
+          // report was received through some other channel (someone
+          // entered it directly into SportsEngine, bypassing matchday).
+          if (g.seHomeScore != null && g.seHomeScore !== '' && g.seAwayScore != null && g.seAwayScore !== '') {
+            gamesWithSeScore.push(g.eventId);
+          }
+        }
+
+        // Auto-flag "MO report received" for games with an SE score, but
+        // only if our OWN system doesn't already have a real report for
+        // it - a real report always takes priority and displays as it
+        // does now, per the explicit requirement.
+        let autoFlaggedCount = 0;
+        if (gamesWithSeScore.length > 0) {
+          const existingReportsResult = await pool.query(
+            'SELECT game_id FROM match_report_scores WHERE game_id = ANY($1)',
+            [gamesWithSeScore]
+          );
+          const alreadyHasRealReport = new Set(existingReportsResult.rows.map(r => r.game_id));
+          const toAutoFlag = gamesWithSeScore.filter(id => !alreadyHasRealReport.has(id));
+          for (const gameId of toAutoFlag) {
+            const result = await pool.query(
+              `INSERT INTO external_report_flags (game_id, flagged_by)
+               VALUES ($1, $2)
+               ON CONFLICT (game_id) DO NOTHING`,
+              [gameId, 'auto-detected (SE score present)']
+            );
+            if (result.rowCount > 0) autoFlaggedCount++;
+          }
         }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, syncedCount, rangeFrom: rangeFrom.toISOString(), rangeTo: rangeTo.toISOString() }));
+        res.end(JSON.stringify({ success: true, syncedCount, autoFlaggedCount, rangeFrom: rangeFrom.toISOString(), rangeTo: rangeTo.toISOString() }));
       } catch (err) {
         console.error('[api/match-reports sync-schedule] Error:', err.message);
         res.writeHead(500, { 'Content-Type': 'application/json' });
