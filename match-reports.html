@@ -63,8 +63,8 @@
         <select id="reportStatusFilter" onchange="applyReportFilterAndRender()">
           <option value="all">All Games</option>
           <option value="has_report">Has Report</option>
-          <option value="missing_report">Missing Report</option>
-          <option value="no_report_registered">No Report Registered</option>
+          <option value="missing_report">Missing Report (Beta)</option>
+          <option value="no_report_registered">No Report</option>
         </select>
       </div>
       <div class="field">
@@ -203,8 +203,8 @@
     const noReportRegistered = lastLoadedReports.filter(r => !r.has_report && !r.flagged_external).length;
     document.getElementById('summaryStats').innerHTML = `
       <strong>${totalGames}</strong> total games &nbsp;·&nbsp;
-      <strong>${missingReport}</strong> missing report &nbsp;·&nbsp;
-      <strong>${noReportRegistered}</strong> no report registered
+      <strong>${missingReport}</strong> missing report (beta) &nbsp;·&nbsp;
+      <strong>${noReportRegistered}</strong> no report
     `;
   }
 
@@ -244,7 +244,7 @@
     }
     const missingCount = reports.filter(r => !r.has_report).length;
     box.innerHTML = `
-      <p class="muted" style="margin-top:0;">${reports.length} game(s)${missingCount > 0 ? ' - ' + missingCount + ' missing a report' : ''}</p>
+      <p class="muted" style="margin-top:0;">${reports.length} game(s)${missingCount > 0 ? ' - ' + missingCount + ' no report' : ''}</p>
       <div style="overflow-x:auto;">
       <table>
         <thead><tr>
