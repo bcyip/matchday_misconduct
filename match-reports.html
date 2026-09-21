@@ -242,9 +242,7 @@
       box.innerHTML = '<p class="muted">No games match these filters.</p>';
       return;
     }
-    const missingCount = reports.filter(r => !r.has_report).length;
     box.innerHTML = `
-      <p class="muted" style="margin-top:0;">${reports.length} game(s)${missingCount > 0 ? ' - ' + missingCount + ' no report' : ''}</p>
       <div style="overflow-x:auto;">
       <table>
         <thead><tr>
