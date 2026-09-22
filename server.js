@@ -1177,7 +1177,7 @@ const server = http.createServer(async (req, res) => {
         SELECT
           e.id AS entry_id, e.game_id, e.team_id, e.team_name, e.person_type,
           e.profile_id, e.name, e.event_type, e.minute, e.reason, e.supplemental_report,
-          s.game_date,
+          s.game_date, s.gender,
           r.status, r.committee_notes, r.reviewed_by, r.reviewed_at,
           sus.games_suspended, sus.standard_games,
           LEAST(
@@ -1215,7 +1215,7 @@ const server = http.createServer(async (req, res) => {
           (s.team1_name || ' vs ' || s.team2_name) AS team_name, NULL AS person_type,
           NULL AS profile_id, s.gender AS name, 'Report' AS event_type, NULL AS minute,
           'Incident Report' AS reason, NULL AS supplemental_report,
-          s.game_date,
+          s.game_date, s.gender,
           NULL AS status, NULL AS committee_notes, NULL AS reviewed_by, NULL AS reviewed_at,
           NULL AS games_suspended, NULL AS standard_games, NULL AS games_served,
           s.incident_report
