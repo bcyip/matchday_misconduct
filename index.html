@@ -61,18 +61,6 @@
 <main>
   <div class="card">
     <div class="filters">
-      <div class="checkbox-field">
-        <input type="checkbox" id="includeRed" checked onchange="loadMisconduct()" />
-        <label for="includeRed" style="margin:0; text-transform:none; font-weight:400; color:#1a1a1a; font-size:14px;">Red Cards</label>
-      </div>
-      <div class="checkbox-field">
-        <input type="checkbox" id="includeYellow" onchange="loadMisconduct()" />
-        <label for="includeYellow" style="margin:0; text-transform:none; font-weight:400; color:#1a1a1a; font-size:14px;">Yellow Cards</label>
-      </div>
-      <div class="checkbox-field">
-        <input type="checkbox" id="includeIncidentReports" checked onchange="loadMisconduct()" />
-        <label for="includeIncidentReports" style="margin:0; text-transform:none; font-weight:400; color:#1a1a1a; font-size:14px;">Incident Reports</label>
-      </div>
       <div class="field">
         <label for="teamFilter">Team</label>
         <select id="teamFilter" onchange="loadMisconduct()">
@@ -90,6 +78,24 @@
       <div class="field">
         <label for="dateTo">To</label>
         <input type="date" id="dateTo" onchange="loadMisconduct()" />
+      </div>
+    </div>
+    <div class="filters" style="margin-top:14px;">
+      <div class="field">
+        <label style="visibility:hidden;">.</label>
+        <button type="button" onclick="exportMisconductCsv()" style="padding:9px 16px; background:var(--navy); color:#fff; border:none; border-radius:6px; font-size:13.5px; font-weight:600; cursor:pointer;">Export CSV</button>
+      </div>
+      <div class="checkbox-field">
+        <input type="checkbox" id="includeRed" checked onchange="loadMisconduct()" />
+        <label for="includeRed" style="margin:0; text-transform:none; font-weight:400; color:#1a1a1a; font-size:14px;">Red Cards</label>
+      </div>
+      <div class="checkbox-field">
+        <input type="checkbox" id="includeYellow" onchange="loadMisconduct()" />
+        <label for="includeYellow" style="margin:0; text-transform:none; font-weight:400; color:#1a1a1a; font-size:14px;">Yellow Cards</label>
+      </div>
+      <div class="checkbox-field">
+        <input type="checkbox" id="includeIncidentReports" checked onchange="loadMisconduct()" />
+        <label for="includeIncidentReports" style="margin:0; text-transform:none; font-weight:400; color:#1a1a1a; font-size:14px;">Incident Reports</label>
       </div>
     </div>
   </div>
@@ -294,6 +300,44 @@
     } catch (e) {
       resultEl.innerHTML = '<span class="err">Failed: ' + escapeHtml(e.message) + '</span>';
     }
+  }
+
+  // Proper CSV field escaping - wraps in quotes and doubles any internal
+  // quotes whenever the value contains a comma, quote, or newline.
+  function csvEscape(value) {
+    const str = value == null ? '' : String(value);
+    if (/[",\n]/.test(str)) {
+      return '"' + str.replace(/"/g, '""') + '"';
+    }
+    return str;
+  }
+
+  function exportMisconductCsv() {
+    const headers = ['Date', 'Gender', 'Team', 'Player Name', 'Reason', 'Report Description', 'Games Suspended'];
+    const rows = misconductData.map(row => {
+      const isReport = row.event_type === 'Report';
+      const dateStr = row.game_date ? new Date(row.game_date).toLocaleDateString('en-US', { timeZone: 'America/New_York' }) : '';
+      const playerName = isReport ? '' : (row.name || '');
+      // Description lives in different fields depending on row type -
+      // supplemental_report for card entries, incident_report for the
+      // synthetic Report rows.
+      const description = row.supplemental_report || row.incident_report || '';
+      const gamesSuspended = row.event_type === 'Red Card'
+        ? (row.games_suspended != null ? row.games_suspended : row.standard_games)
+        : '';
+      return [dateStr, row.gender || '', row.team_name || '', playerName, row.reason || '', description, gamesSuspended];
+    });
+
+    const csvContent = [headers, ...rows].map(r => r.map(csvEscape).join(',')).join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'misconduct-export-' + new Date().toISOString().slice(0, 10) + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   function escapeHtml(str) {
