@@ -79,6 +79,14 @@
         <label for="dateTo">To</label>
         <input type="date" id="dateTo" onchange="loadMisconduct()" />
       </div>
+      <div class="field">
+        <label for="reviewStatusFilter">Review Status</label>
+        <select id="reviewStatusFilter" onchange="loadMisconduct()">
+          <option value="all">All</option>
+          <option value="pending">Pending</option>
+          <option value="reviewed">Reviewed</option>
+        </select>
+      </div>
     </div>
     <div class="filters" style="margin-top:14px;">
       <div class="field">
@@ -175,6 +183,8 @@
     if (dateFrom) params.set('dateFrom', dateFrom);
     const dateTo = document.getElementById('dateTo').value;
     if (dateTo) params.set('dateTo', dateTo);
+    const reviewStatus = document.getElementById('reviewStatusFilter').value;
+    if (reviewStatus && reviewStatus !== 'all') params.set('reviewStatus', reviewStatus);
 
     const res = await fetch('/api/misconduct?' + params.toString());
     const data = await res.json();

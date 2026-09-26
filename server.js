@@ -1159,6 +1159,11 @@ const server = http.createServer(async (req, res) => {
       const playerName = url.searchParams.get('playerName') || null;
       const dateFrom = url.searchParams.get('dateFrom') || null;
       const dateTo = url.searchParams.get('dateTo') || null;
+      // 'all' (default), 'pending', or 'reviewed' - filters on the same
+      // pending/reviewed status the frontend already displays as a badge.
+      // No review row yet counts as 'pending', same as the response
+      // shaping further down.
+      const reviewStatus = url.searchParams.get('reviewStatus') || 'all';
 
       const eventTypes = [];
       if (includeRed) eventTypes.push('Red Card');
@@ -1172,6 +1177,8 @@ const server = http.createServer(async (req, res) => {
       if (playerName) { conditions.push(`e.name ILIKE $${paramIdx++}`); params.push('%' + playerName + '%'); }
       if (dateFrom) { conditions.push(`s.game_date >= $${paramIdx++}`); params.push(dateFrom); }
       if (dateTo) { conditions.push(`s.game_date <= $${paramIdx++}`); params.push(dateTo); }
+      if (reviewStatus === 'pending') { conditions.push(`(r.status IS NULL OR r.status = 'pending')`); }
+      else if (reviewStatus === 'reviewed') { conditions.push(`r.status = 'reviewed'`); }
 
       const query = `
         SELECT
@@ -1223,9 +1230,15 @@ const server = http.createServer(async (req, res) => {
         WHERE ${incidentConditions.join(' AND ')}
       `;
 
+      // Incident reports have no review-status workflow of their own (no
+      // misconduct_reviews row is ever created for them), so a specific
+      // pending/reviewed filter excludes them entirely rather than showing
+      // them under a status they don't actually have.
+      const includeIncidentRows = includeIncidentReports && reviewStatus === 'all';
+
       const [result, incidentResult] = await Promise.all([
         eventTypes.length > 0 ? pool.query(query, params) : Promise.resolve({ rows: [] }),
-        includeIncidentReports ? pool.query(incidentQuery, incidentParams) : Promise.resolve({ rows: [] }),
+        includeIncidentRows ? pool.query(incidentQuery, incidentParams) : Promise.resolve({ rows: [] }),
       ]);
       const combinedRows = [...result.rows, ...incidentResult.rows].sort((a, b) => {
         const dateA = a.game_date ? new Date(a.game_date).getTime() : -Infinity;
