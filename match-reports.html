@@ -41,7 +41,8 @@
     <div class="filters">
       <div class="field">
         <label for="conferenceFilter">Conference</label>
-        <select id="conferenceFilter" multiple size="3" style="min-width:110px; padding:6px; border:1px solid var(--border); border-radius:6px; font-size:13px;">
+        <select id="conferenceFilter" multiple size="4" onchange="onConferenceFilterChange()" style="min-width:110px; padding:6px; border:1px solid var(--border); border-radius:6px; font-size:13px;">
+          <option value="">All Conferences</option>
           <option value="West">West</option>
           <option value="Central">Central</option>
           <option value="East">East</option>
@@ -70,7 +71,8 @@
         <label for="reportStatusFilter">Show</label>
         <select id="reportStatusFilter" onchange="applyReportFilterAndRender()">
           <option value="all">All Games</option>
-          <option value="has_report">Has Report</option>
+          <option value="has_report">Our DB Report</option>
+          <option value="mo_report_only">MO Report Only</option>
           <option value="missing_report">Missing Report (Beta)</option>
           <option value="no_report_registered">No Report</option>
         </select>
@@ -191,11 +193,33 @@
     }
   }
 
+  // Keeps "All Conferences" and the specific conferences mutually
+  // exclusive in the multi-select - picking "All" clears any specific
+  // ones (ctrl/cmd-clicking each one to deselect it is fiddly), and
+  // picking a specific one deselects "All".
+  function onConferenceFilterChange() {
+    const select = document.getElementById('conferenceFilter');
+    const options = [...select.options];
+    const allOption = options.find(o => o.value === '');
+    if (allOption.selected) {
+      options.forEach(o => { if (o.value !== '') o.selected = false; });
+    } else {
+      allOption.selected = false;
+    }
+  }
+
   // Purely client-side - filters the already-loaded data, no re-fetch.
   function applyReportFilterAndRender() {
     const status = document.getElementById('reportStatusFilter').value;
     let filtered = lastLoadedReports;
     if (status === 'has_report') filtered = lastLoadedReports.filter(r => r.has_report);
+    // A game only ever gets auto-flagged (or stays flagged) as "MO report
+    // received" while our own system has no real report for it - see the
+    // sync-schedule comment server-side - so this is never true at the
+    // same time as has_report in normal operation, but the has_report
+    // check is kept anyway as a safety net in case a report is later
+    // submitted for an already-flagged game without the flag being cleared.
+    else if (status === 'mo_report_only') filtered = lastLoadedReports.filter(r => r.flagged_external && !r.has_report);
     else if (status === 'missing_report') filtered = lastLoadedReports.filter(r => !r.has_report);
     else if (status === 'no_report_registered') filtered = lastLoadedReports.filter(r => !r.has_report && !r.flagged_external);
     renderSummaryStats();
@@ -208,10 +232,12 @@
   function renderSummaryStats() {
     const totalGames = lastLoadedReports.length;
     const missingReport = lastLoadedReports.filter(r => !r.has_report).length;
+    const moReportOnly = lastLoadedReports.filter(r => r.flagged_external && !r.has_report).length;
     const noReportRegistered = lastLoadedReports.filter(r => !r.has_report && !r.flagged_external).length;
     document.getElementById('summaryStats').innerHTML = `
       <strong>${totalGames}</strong> total games &nbsp;·&nbsp;
       <strong>${missingReport}</strong> missing report (beta) &nbsp;·&nbsp;
+      <strong>${moReportOnly}</strong> MO report only &nbsp;·&nbsp;
       <strong>${noReportRegistered}</strong> no report
     `;
   }
@@ -224,7 +250,11 @@
     const dateFrom = document.getElementById('dateFrom').value;
     const dateTo = document.getElementById('dateTo').value;
     if (selectedDivisionIds.size > 0) params.set('division', [...selectedDivisionIds].join(','));
-    const selectedConferences = [...document.getElementById('conferenceFilter').selectedOptions].map(o => o.value);
+    // "All Conferences" has value "" - filtered out here so it never gets
+    // sent as a literal empty conference; selecting it (see
+    // onConferenceFilterChange) already clears every specific selection,
+    // so no filter being sent is exactly what "All" means.
+    const selectedConferences = [...document.getElementById('conferenceFilter').selectedOptions].map(o => o.value).filter(Boolean);
     if (selectedConferences.length > 0) params.set('conference', selectedConferences.join(','));
     if (team) params.set('team', team);
     if (gender) params.set('gender', gender);
