@@ -899,6 +899,10 @@ const server = http.createServer(async (req, res) => {
       // deliberately - never merged into team1_score/team2_score, so the
       // two sources are never confused with each other on display.
       const seScoreByGameId = new Map(cacheResult.rows.map(g => [g.game_id, { seHomeScore: g.se_home_score, seAwayScore: g.se_away_score }]));
+      // Venue/location isn't stored on match_report_scores at all (only the
+      // schedule cache has it), so it's looked up here and attached to
+      // every row below regardless of whether a real report exists yet.
+      const locationByGameId = new Map(cacheResult.rows.map(g => [g.game_id, g.location_name]));
 
       mergedRows = cacheResult.rows.map(g => {
         const existing = reportByGameId.get(g.game_id);
@@ -972,6 +976,7 @@ const server = http.createServer(async (req, res) => {
           // Goals/cards for the box score modal - empty for games with no
           // real report (forfeits, or nothing submitted yet).
           entries: entriesByGameId.get(r.game_id) || [],
+          location_name: locationByGameId.get(r.game_id) || null,
         };
       });
 

@@ -48,12 +48,12 @@
     .mr-cards { display: none; }
     .mr-card { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; }
     .mr-card-report-link { display: block; text-align: center; font-size: 11px; font-weight: 600; color: var(--navy); text-decoration: none; }
-    .mr-card-teams { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 4px; font-size: 13px; font-weight: 600; }
+    .mr-card-meta { text-align: center; font-size: 10.5px; color: var(--gray); margin-top: 2px; }
+    .mr-card-teams { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 5px; font-size: 13px; font-weight: 600; }
     .mr-card-teams .mr-card-team { flex: 1; text-align: right; }
     .mr-card-teams .mr-card-team:last-child { text-align: left; }
+    .mr-card-cards { flex-shrink: 0; white-space: nowrap; }
     .mr-card-score-inline { flex-shrink: 0; font-weight: 700; color: var(--navy); font-size: 13.5px; white-space: nowrap; }
-    .mr-card-meta { text-align: center; font-size: 10.5px; color: var(--gray); margin-top: 3px; }
-    .mr-card-cardcounts { display: flex; justify-content: center; gap: 14px; margin-top: 3px; font-size: 11px; }
     .mr-card-boxscore-row { text-align: center; margin-top: 4px; }
     .mr-card-boxscore-row .push-score-btn { padding: 3px 8px; font-size: 11px; }
     .mr-card-actions { margin-top: 6px; text-align: center; font-size: 12px; }
@@ -380,10 +380,29 @@
   }
 
   // Shared between the table's Actions column and the mobile card's
-  // actions area - same markup, same behavior, just rendered in two
-  // different containers depending on screen width.
-  function actionsHtml(r) {
+  // actions area - same behavior either way, but `compact` (mobile only)
+  // lays the forfeit/no-report controls out on one flex-wrapped line
+  // instead of stacked, to save vertical space in the card.
+  function actionsHtml(r, compact) {
     if (r.is_forfeit) {
+      if (compact) {
+        return `
+          <div style="display:flex; align-items:center; justify-content:center; gap:6px; flex-wrap:wrap;">
+            <select onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.value)" style="font-size:11px; padding:2px 4px; border:1px solid var(--border); border-radius:5px;">
+              <option value="forfeit" ${r.forfeit_reason === 'forfeit' ? 'selected' : ''}>Forfeit</option>
+              <option value="postponed" ${r.forfeit_reason === 'postponed' ? 'selected' : ''}>Postponed</option>
+              <option value="rainout" ${r.forfeit_reason === 'rainout' ? 'selected' : ''}>Rainout</option>
+              <option value="">— Clear —</option>
+            </select>
+            <span class="muted">Pay ref?</span>
+            <select onchange="setRefereePaid('${escapeJs(r.game_id)}', this.value)" style="font-size:11px; padding:2px 4px; border:1px solid var(--border); border-radius:5px;">
+              <option value="" ${r.referee_paid == null ? 'selected' : ''}>—</option>
+              <option value="true" ${r.referee_paid === true ? 'selected' : ''}>Yes</option>
+              <option value="false" ${r.referee_paid === false ? 'selected' : ''}>No</option>
+            </select>
+          </div>
+        `;
+      }
       return `
         <select onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.value)" style="font-size:11.5px; padding:3px 5px; border:1px solid var(--border); border-radius:5px;">
           <option value="forfeit" ${r.forfeit_reason === 'forfeit' ? 'selected' : ''}>Forfeit</option>
@@ -406,6 +425,23 @@
         <button class="push-score-btn" onclick="pushScore('${escapeJs(r.game_id)}', this)">Push Score to SE</button>
         <span class="push-score-result" style="display:block; font-size:11px; margin-top:3px;"></span>
         ${r.incident_report ? `<button class="push-score-btn" style="margin-top:4px;" onclick="toggleIncidentReport('${escapeJs(r.game_id)}')">View Incident Report</button>` : ''}
+      `;
+    }
+    if (compact) {
+      return `
+        <div style="display:flex; align-items:center; justify-content:center; gap:8px; flex-wrap:wrap;">
+          <span class="muted">No report yet</span>
+          <label style="display:flex; align-items:center; gap:4px; font-weight:400; cursor:pointer;">
+            <input type="checkbox" ${r.flagged_external ? 'checked' : ''} onchange="toggleExternalFlag('${escapeJs(r.game_id)}', this.checked)" />
+            MO report
+          </label>
+          <select onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.value)" style="font-size:11px; padding:2px 4px; border:1px solid var(--border); border-radius:5px;">
+            <option value="" selected>Forfeit/Postponed/Rainout?</option>
+            <option value="forfeit">Forfeit</option>
+            <option value="postponed">Postponed</option>
+            <option value="rainout">Rainout</option>
+          </select>
+        </div>
       `;
     }
     return `
@@ -485,20 +521,16 @@
           return `
           <div class="mr-card"${bg ? ` style="background:${bg};"` : ''}>
             <a class="mr-card-report-link" href="${r.game_id ? 'https://octopus-app-ilp92.ondigitalocean.app/?game=' + encodeURIComponent(r.game_id) : '#'}" target="_blank" rel="noopener">${r.game_id ? 'Match Report URL' : '—'}</a>
+            <div class="mr-card-meta">${r.game_date ? new Date(r.game_date).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short' }) + ' ET' : '—'} · ${escapeHtml(r.gender || '')} · ${escapeHtml(r.division_name || '')}${r.location_name ? ' · ' + escapeHtml(r.location_name) : ''}${!r.has_report && !r.is_forfeit && r.se_home_score != null && r.se_away_score != null ? ' · (score from SE/MO)' : ''}</div>
             <div class="mr-card-teams">
               <div class="mr-card-team">${escapeHtml(r.team1_name)}</div>
+              ${!r.is_forfeit ? `<div class="mr-card-cards">${cardCount(r.team1_yellow_count, 'yc-count')}${cardCount(r.team1_red_count, 'rc-count')}</div>` : ''}
               <div class="mr-card-score-inline">${escapeHtml(scoreText(r))}</div>
+              ${!r.is_forfeit ? `<div class="mr-card-cards">${cardCount(r.team2_yellow_count, 'yc-count')}${cardCount(r.team2_red_count, 'rc-count')}</div>` : ''}
               <div class="mr-card-team">${escapeHtml(r.team2_name)}</div>
             </div>
-            ${!r.is_forfeit ? `
-              <div class="mr-card-cardcounts">
-                <span>${cardCount(r.team1_yellow_count, 'yc-count')}${cardCount(r.team1_red_count, 'rc-count')}${(!r.team1_yellow_count && !r.team1_red_count) ? '<span class="muted">—</span>' : ''}</span>
-                <span>${cardCount(r.team2_yellow_count, 'yc-count')}${cardCount(r.team2_red_count, 'rc-count')}${(!r.team2_yellow_count && !r.team2_red_count) ? '<span class="muted">—</span>' : ''}</span>
-              </div>
-            ` : ''}
             ${boxScoreButtonHtml(r) ? `<div class="mr-card-boxscore-row">${boxScoreButtonHtml(r)}</div>` : ''}
-            <div class="mr-card-meta">${r.game_date ? new Date(r.game_date).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short' }) + ' ET' : '—'} · ${escapeHtml(r.gender || '')} · ${escapeHtml(r.division_name || '')}${!r.has_report && !r.is_forfeit && r.se_home_score != null && r.se_away_score != null ? ' · (score from SE/MO)' : ''}</div>
-            <div class="mr-card-actions">${actionsHtml(r)}</div>
+            <div class="mr-card-actions">${actionsHtml(r, true)}</div>
           </div>
         `;
         }).join('')}
