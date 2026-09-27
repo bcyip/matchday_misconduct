@@ -46,16 +46,18 @@
        stacked and centered below the teams) doesn't map onto reshuffled
        table cells. */
     .mr-cards { display: none; }
-    .mr-card { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
-    .mr-card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
-    .mr-card-report-link { font-size: 12px; font-weight: 600; color: var(--navy); text-decoration: none; white-space: nowrap; }
-    .mr-card-teams { text-align: right; font-size: 13.5px; font-weight: 600; }
-    .mr-card-teams div { line-height: 1.4; }
-    .mr-card-meta { font-size: 11.5px; color: var(--gray); margin-top: 4px; }
-    .mr-card-center { text-align: center; margin: 12px 0; padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-    .mr-card-score { font-size: 18px; font-weight: 700; color: var(--navy); }
-    .mr-card-cardcounts { display: flex; justify-content: center; gap: 18px; margin-top: 6px; font-size: 12.5px; }
-    .mr-card-actions { margin-top: 10px; }
+    .mr-card { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; }
+    .mr-card-report-link { display: block; text-align: center; font-size: 11px; font-weight: 600; color: var(--navy); text-decoration: none; }
+    .mr-card-teams { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 4px; font-size: 13px; font-weight: 600; }
+    .mr-card-teams .mr-card-team { flex: 1; text-align: right; }
+    .mr-card-teams .mr-card-team:last-child { text-align: left; }
+    .mr-card-score-inline { flex-shrink: 0; font-weight: 700; color: var(--navy); font-size: 13.5px; white-space: nowrap; }
+    .mr-card-meta { text-align: center; font-size: 10.5px; color: var(--gray); margin-top: 3px; }
+    .mr-card-cardcounts { display: flex; justify-content: center; gap: 14px; margin-top: 3px; font-size: 11px; }
+    .mr-card-boxscore-row { text-align: center; margin-top: 4px; }
+    .mr-card-boxscore-row .push-score-btn { padding: 3px 8px; font-size: 11px; }
+    .mr-card-actions { margin-top: 6px; text-align: center; font-size: 12px; }
+    .mr-card-actions .push-score-btn { padding: 4px 9px; font-size: 11.5px; }
 
     @media (max-width: 720px) {
       .table-wrap { display: none; }
@@ -347,6 +349,15 @@
     return `<span class="card-count ${colorClass}">${count}</span>`;
   }
 
+  // Same highlight color rule shared by the table row and the mobile
+  // card: gray for forfeit/postponed/rainout, yellow for MO-flagged with
+  // no report of our own yet, red for no report and no flag at all.
+  function rowBgColor(r) {
+    if (r.is_forfeit) return '#F4F6FA';
+    if (!r.has_report) return r.flagged_external ? '#FDF0DD' : '#FBEAE8';
+    return null;
+  }
+
   function reasonLabelFor(r) {
     return r.forfeit_reason ? r.forfeit_reason.charAt(0).toUpperCase() + r.forfeit_reason.slice(1) : null;
   }
@@ -429,9 +440,8 @@
         </tr></thead>
         <tbody>
           ${reports.map(r => {
-            const rowStyle = r.is_forfeit ? ' style="background:#F4F6FA;"'
-              : !r.has_report ? (r.flagged_external ? ' style="background:#FDF0DD;"' : ' style="background:#FBEAE8;"')
-              : '';
+            const bg = rowBgColor(r);
+            const rowStyle = bg ? ` style="background:${bg};"` : '';
             return `
             <tr${rowStyle}>
               <td style="font-size:11.5px; white-space:nowrap;">${r.game_id ? `<a href="https://octopus-app-ilp92.ondigitalocean.app/?game=${encodeURIComponent(r.game_id)}" target="_blank" rel="noopener" style="color:var(--navy);">Match Report URL</a>` : '—'}</td>
@@ -470,29 +480,28 @@
       </div>
 
       <div class="mr-cards">
-        ${reports.map(r => `
-          <div class="mr-card">
-            <div class="mr-card-header">
-              <a class="mr-card-report-link" href="${r.game_id ? 'https://octopus-app-ilp92.ondigitalocean.app/?game=' + encodeURIComponent(r.game_id) : '#'}" target="_blank" rel="noopener">${r.game_id ? 'Match Report URL' : '—'}</a>
-              <div class="mr-card-teams">
-                <div>${escapeHtml(r.team1_name)}</div>
-                <div>${escapeHtml(r.team2_name)}</div>
+        ${reports.map(r => {
+          const bg = rowBgColor(r);
+          return `
+          <div class="mr-card"${bg ? ` style="background:${bg};"` : ''}>
+            <a class="mr-card-report-link" href="${r.game_id ? 'https://octopus-app-ilp92.ondigitalocean.app/?game=' + encodeURIComponent(r.game_id) : '#'}" target="_blank" rel="noopener">${r.game_id ? 'Match Report URL' : '—'}</a>
+            <div class="mr-card-teams">
+              <div class="mr-card-team">${escapeHtml(r.team1_name)}</div>
+              <div class="mr-card-score-inline">${escapeHtml(scoreText(r))}</div>
+              <div class="mr-card-team">${escapeHtml(r.team2_name)}</div>
+            </div>
+            ${!r.is_forfeit ? `
+              <div class="mr-card-cardcounts">
+                <span>${cardCount(r.team1_yellow_count, 'yc-count')}${cardCount(r.team1_red_count, 'rc-count')}${(!r.team1_yellow_count && !r.team1_red_count) ? '<span class="muted">—</span>' : ''}</span>
+                <span>${cardCount(r.team2_yellow_count, 'yc-count')}${cardCount(r.team2_red_count, 'rc-count')}${(!r.team2_yellow_count && !r.team2_red_count) ? '<span class="muted">—</span>' : ''}</span>
               </div>
-            </div>
-            <div class="mr-card-meta">${r.game_date ? new Date(r.game_date).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short' }) + ' ET' : '—'} · ${escapeHtml(r.gender || '')} · ${escapeHtml(r.division_name || '')}</div>
-            <div class="mr-card-center">
-              <div class="mr-card-score">${escapeHtml(scoreText(r))}${!r.has_report && !r.is_forfeit && r.se_home_score != null && r.se_away_score != null ? ' <span class="muted" style="font-weight:400; font-size:11px;">(from SE/MO)</span>' : ''}</div>
-              ${!r.is_forfeit ? `
-                <div class="mr-card-cardcounts">
-                  <span>${escapeHtml(r.team1_name)}: ${cardCount(r.team1_yellow_count, 'yc-count')}${cardCount(r.team1_red_count, 'rc-count')}${(!r.team1_yellow_count && !r.team1_red_count) ? '<span class="muted">none</span>' : ''}</span>
-                  <span>${escapeHtml(r.team2_name)}: ${cardCount(r.team2_yellow_count, 'yc-count')}${cardCount(r.team2_red_count, 'rc-count')}${(!r.team2_yellow_count && !r.team2_red_count) ? '<span class="muted">none</span>' : ''}</span>
-                </div>
-              ` : ''}
-              ${boxScoreButtonHtml(r)}
-            </div>
+            ` : ''}
+            ${boxScoreButtonHtml(r) ? `<div class="mr-card-boxscore-row">${boxScoreButtonHtml(r)}</div>` : ''}
+            <div class="mr-card-meta">${r.game_date ? new Date(r.game_date).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short' }) + ' ET' : '—'} · ${escapeHtml(r.gender || '')} · ${escapeHtml(r.division_name || '')}${!r.has_report && !r.is_forfeit && r.se_home_score != null && r.se_away_score != null ? ' · (score from SE/MO)' : ''}</div>
             <div class="mr-card-actions">${actionsHtml(r)}</div>
           </div>
-        `).join('')}
+        `;
+        }).join('')}
       </div>
     `;
   }
