@@ -71,12 +71,13 @@
         <label for="reportStatusFilter">Show</label>
         <select id="reportStatusFilter" onchange="applyReportFilterAndRender()">
           <option value="all">All Games</option>
-          <option value="has_report">Our DB Report</option>
-          <option value="mo_report_only">MO Report Only</option>
-          <option value="missing_report">Missing Report (Beta)</option>
+          <option value="has_report">USCCS Report</option>
+          <option value="mo_report_only">MO Report</option>
           <option value="no_report_registered">No Report</option>
         </select>
       </div>
+    </div>
+    <div class="filters" style="margin-top:14px;">
       <div class="field">
         <label for="dateFrom">From</label>
         <input type="date" id="dateFrom"  />
@@ -84,6 +85,10 @@
       <div class="field">
         <label for="dateTo">To</label>
         <input type="date" id="dateTo"  />
+      </div>
+      <div class="field">
+        <label style="visibility:hidden;">.</label>
+        <button type="button" onclick="setDateRangeToToday()" style="padding:9px 16px; background:#fff; color:var(--navy); border:1px solid var(--border); border-radius:6px; font-size:13.5px; font-weight:600; cursor:pointer;">Today</button>
       </div>
       <div class="field">
         <label style="visibility:hidden;">.</label>
@@ -208,6 +213,26 @@
     }
   }
 
+  // "Today" fills both date inputs with today's date in Eastern time (not
+  // the browser's local time) - games are keyed to Eastern days everywhere
+  // else in this app (see getEasternDayBounds server-side), so this stays
+  // consistent with that rather than drifting a day off for anyone not in
+  // Eastern time.
+  function todayDateStringEastern() {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+    const y = parts.find(p => p.type === 'year').value;
+    const m = parts.find(p => p.type === 'month').value;
+    const d = parts.find(p => p.type === 'day').value;
+    return `${y}-${m}-${d}`;
+  }
+
+  function setDateRangeToToday() {
+    const today = todayDateStringEastern();
+    document.getElementById('dateFrom').value = today;
+    document.getElementById('dateTo').value = today;
+    loadReports();
+  }
+
   // Purely client-side - filters the already-loaded data, no re-fetch.
   function applyReportFilterAndRender() {
     const status = document.getElementById('reportStatusFilter').value;
@@ -220,7 +245,6 @@
     // check is kept anyway as a safety net in case a report is later
     // submitted for an already-flagged game without the flag being cleared.
     else if (status === 'mo_report_only') filtered = lastLoadedReports.filter(r => r.flagged_external && !r.has_report);
-    else if (status === 'missing_report') filtered = lastLoadedReports.filter(r => !r.has_report);
     else if (status === 'no_report_registered') filtered = lastLoadedReports.filter(r => !r.has_report && !r.flagged_external);
     renderSummaryStats();
     renderReports(filtered);
@@ -229,16 +253,19 @@
   // Summary counts are always over the FULL loaded set, regardless of
   // which filter is currently applied - so the numbers stay stable as a
   // reference point while browsing different filtered views.
+  // These three counts partition the full set exactly - every game is
+  // USCCS report, MO report, or no report, never more than one - so they
+  // always add up to totalGames.
   function renderSummaryStats() {
     const totalGames = lastLoadedReports.length;
-    const missingReport = lastLoadedReports.filter(r => !r.has_report).length;
-    const moReportOnly = lastLoadedReports.filter(r => r.flagged_external && !r.has_report).length;
-    const noReportRegistered = lastLoadedReports.filter(r => !r.has_report && !r.flagged_external).length;
+    const usccsReport = lastLoadedReports.filter(r => r.has_report).length;
+    const moReport = lastLoadedReports.filter(r => r.flagged_external && !r.has_report).length;
+    const noReport = lastLoadedReports.filter(r => !r.has_report && !r.flagged_external).length;
     document.getElementById('summaryStats').innerHTML = `
       <strong>${totalGames}</strong> total games &nbsp;·&nbsp;
-      <strong>${missingReport}</strong> missing report (beta) &nbsp;·&nbsp;
-      <strong>${moReportOnly}</strong> MO report only &nbsp;·&nbsp;
-      <strong>${noReportRegistered}</strong> no report
+      <strong>${usccsReport}</strong> USCCS report &nbsp;·&nbsp;
+      <strong>${moReport}</strong> MO report &nbsp;·&nbsp;
+      <strong>${noReport}</strong> no report
     `;
   }
 
