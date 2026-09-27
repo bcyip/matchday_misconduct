@@ -54,8 +54,8 @@
     .mr-card-teams .mr-card-team:last-child { text-align: left; }
     .mr-card-cards { flex-shrink: 0; white-space: nowrap; }
     .mr-card-score-inline { flex-shrink: 0; font-weight: 700; color: var(--navy); font-size: 13.5px; white-space: nowrap; }
-    .mr-card-boxscore-row { text-align: center; margin-top: 4px; }
-    .mr-card-boxscore-row .push-score-btn { padding: 3px 8px; font-size: 11px; }
+    .mr-card-incident-row { text-align: center; margin-top: 4px; }
+    .mr-card-incident-row .push-score-btn { padding: 3px 8px; font-size: 11px; }
     .mr-card-actions { margin-top: 6px; text-align: center; font-size: 12px; }
     .mr-card-actions .push-score-btn { padding: 4px 9px; font-size: 11.5px; }
 
@@ -163,6 +163,15 @@
     <p class="muted" id="boxScoreSubtitle"></p>
     <div class="box-score-cols" id="boxScoreCols"></div>
     <button class="box-score-close" onclick="closeBoxScore()">Close</button>
+  </div>
+</div>
+
+<div class="box-score-overlay" id="incidentReportOverlay" onclick="if (event.target === this) closeIncidentReportModal();">
+  <div class="box-score-modal">
+    <h3 id="incidentReportTitle">Incident Report</h3>
+    <p class="muted" id="incidentReportSubtitle"></p>
+    <p id="incidentReportBody" style="white-space:pre-wrap; font-size:14px; margin:0;"></p>
+    <button class="box-score-close" onclick="closeIncidentReportModal()">Close</button>
   </div>
 </div>
 <script>
@@ -379,6 +388,17 @@
     return `<button class="push-score-btn" style="margin-top:6px;" onclick="openBoxScore('${escapeJs(r.game_id)}')">Box Score</button>`;
   }
 
+  // Mobile card's score line: once a real report exists, the "-" between
+  // the two numbers becomes the Box Score trigger itself, rather than a
+  // separate button underneath - "3 [Box Score] 1" in place of "3 - 1".
+  // Forfeits and SE/MO-only scores keep the plain dash (no events to show).
+  function mobileScoreLineHtml(r) {
+    if (r.has_report && !r.is_forfeit) {
+      return `${escapeHtml(String(r.team1_score))} <a href="#" onclick="openBoxScore('${escapeJs(r.game_id)}'); return false;" style="color:var(--navy); text-decoration:underline;">Box Score</a> ${escapeHtml(String(r.team2_score))}`;
+    }
+    return escapeHtml(scoreText(r));
+  }
+
   // Shared between the table's Actions column and the mobile card's
   // actions area - same behavior either way, but `compact` (mobile only)
   // lays the forfeit/no-report controls out on one flex-wrapped line
@@ -421,6 +441,12 @@
       `;
     }
     if (r.has_report) {
+      // Push Score to SE is left out of the compact (mobile) actions -
+      // that's a desktop-workflow action, kept only in the table's Actions
+      // column. (View Incident Report is left out here too: it toggles a
+      // row that lives inside the table, which is hidden on mobile, so it
+      // wouldn't actually show anything.)
+      if (compact) return '';
       return `
         <button class="push-score-btn" onclick="pushScore('${escapeJs(r.game_id)}', this)">Push Score to SE</button>
         <span class="push-score-result" style="display:block; font-size:11px; margin-top:3px;"></span>
@@ -521,15 +547,15 @@
           return `
           <div class="mr-card"${bg ? ` style="background:${bg};"` : ''}>
             <a class="mr-card-report-link" href="${r.game_id ? 'https://octopus-app-ilp92.ondigitalocean.app/?game=' + encodeURIComponent(r.game_id) : '#'}" target="_blank" rel="noopener">${r.game_id ? 'Match Report URL' : '—'}</a>
-            <div class="mr-card-meta">${r.game_date ? new Date(r.game_date).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short' }) + ' ET' : '—'} · ${escapeHtml(r.gender || '')} · ${escapeHtml(r.division_name || '')}${r.location_name ? ' · ' + escapeHtml(r.location_name) : ''}${!r.has_report && !r.is_forfeit && r.se_home_score != null && r.se_away_score != null ? ' · (score from SE/MO)' : ''}</div>
+            <div class="mr-card-meta">${r.game_date ? new Date(r.game_date).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short' }) + ' ET' : '—'} · ${escapeHtml(r.gender || '')} · ${escapeHtml(r.division_name || '')}${!r.has_report && !r.is_forfeit && r.se_home_score != null && r.se_away_score != null ? ' · (score from SE/MO)' : ''}</div>
             <div class="mr-card-teams">
               <div class="mr-card-team">${escapeHtml(r.team1_name)}</div>
               ${!r.is_forfeit ? `<div class="mr-card-cards">${cardCount(r.team1_yellow_count, 'yc-count')}${cardCount(r.team1_red_count, 'rc-count')}</div>` : ''}
-              <div class="mr-card-score-inline">${escapeHtml(scoreText(r))}</div>
+              <div class="mr-card-score-inline">${mobileScoreLineHtml(r)}</div>
               ${!r.is_forfeit ? `<div class="mr-card-cards">${cardCount(r.team2_yellow_count, 'yc-count')}${cardCount(r.team2_red_count, 'rc-count')}</div>` : ''}
               <div class="mr-card-team">${escapeHtml(r.team2_name)}</div>
             </div>
-            ${boxScoreButtonHtml(r) ? `<div class="mr-card-boxscore-row">${boxScoreButtonHtml(r)}</div>` : ''}
+            ${r.incident_report ? `<div class="mr-card-incident-row"><button class="push-score-btn" onclick="openIncidentReportModal('${escapeJs(r.game_id)}')">View Incident Report</button></div>` : ''}
             <div class="mr-card-actions">${actionsHtml(r, true)}</div>
           </div>
         `;
@@ -577,6 +603,23 @@
 
   function closeBoxScore() {
     document.getElementById('boxScoreOverlay').classList.remove('open');
+  }
+
+  // Used by the mobile card's "View Incident Report" button - a proper
+  // modal, unlike the desktop table's toggleIncidentReport (which just
+  // shows/hides a row baked into the table, invisible on mobile since the
+  // whole table is hidden there).
+  function openIncidentReportModal(gameId) {
+    const r = lastLoadedReports.find(x => x.game_id === gameId);
+    if (!r || !r.incident_report) return;
+
+    document.getElementById('incidentReportSubtitle').textContent = r.team1_name + ' vs ' + r.team2_name;
+    document.getElementById('incidentReportBody').textContent = r.incident_report;
+    document.getElementById('incidentReportOverlay').classList.add('open');
+  }
+
+  function closeIncidentReportModal() {
+    document.getElementById('incidentReportOverlay').classList.remove('open');
   }
 
   function escapeJs(str) {
