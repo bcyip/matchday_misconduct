@@ -26,6 +26,41 @@
     .yc-count { background: #FDF0DD; color: #8A6210; }
     .rc-count { background: #FBEAE8; color: var(--danger); }
     .err-box { background: #FBEAE8; color: var(--danger); padding: 10px 14px; border-radius: 6px; margin-top: 10px; font-size: 13px; }
+
+    /* Box Score modal - match events with home team on the left, away on
+       the right, sorted by minute. */
+    .box-score-overlay { display: none; position: fixed; inset: 0; background: rgba(17,33,63,0.55); z-index: 100; align-items: center; justify-content: center; padding: 20px; }
+    .box-score-overlay.open { display: flex; }
+    .box-score-modal { background: #fff; border-radius: 10px; max-width: 520px; width: 100%; max-height: 82vh; overflow-y: auto; padding: 20px; }
+    .box-score-modal h3 { margin: 0 0 4px; font-size: 16px; color: var(--navy); }
+    .box-score-modal .muted { margin: 0 0 14px; }
+    .box-score-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .box-score-col h4 { font-size: 12px; text-transform: uppercase; color: var(--gray); margin: 0 0 8px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+    .box-score-event { font-size: 13.5px; padding: 4px 0; display: flex; gap: 6px; }
+    .box-score-close { margin-top: 16px; padding: 8px 16px; background: var(--navy); color: #fff; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
+
+    /* Mobile card view - shown instead of the table below a breakpoint
+       (see the @media block at the bottom of this stylesheet). Built as
+       its own markup rather than reusing the table's, since the requested
+       layout (report link left / teams right, score+cards+box-score
+       stacked and centered below the teams) doesn't map onto reshuffled
+       table cells. */
+    .mr-cards { display: none; }
+    .mr-card { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+    .mr-card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+    .mr-card-report-link { font-size: 12px; font-weight: 600; color: var(--navy); text-decoration: none; white-space: nowrap; }
+    .mr-card-teams { text-align: right; font-size: 13.5px; font-weight: 600; }
+    .mr-card-teams div { line-height: 1.4; }
+    .mr-card-meta { font-size: 11.5px; color: var(--gray); margin-top: 4px; }
+    .mr-card-center { text-align: center; margin: 12px 0; padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+    .mr-card-score { font-size: 18px; font-weight: 700; color: var(--navy); }
+    .mr-card-cardcounts { display: flex; justify-content: center; gap: 18px; margin-top: 6px; font-size: 12.5px; }
+    .mr-card-actions { margin-top: 10px; }
+
+    @media (max-width: 720px) {
+      .table-wrap { display: none; }
+      .mr-cards { display: block; }
+    }
   </style>
 </head>
 <body>
@@ -119,6 +154,15 @@
     <div id="reportsBox"><p class="muted">Loading...</p></div>
   </div>
 </main>
+
+<div class="box-score-overlay" id="boxScoreOverlay" onclick="if (event.target === this) closeBoxScore();">
+  <div class="box-score-modal">
+    <h3 id="boxScoreTitle"></h3>
+    <p class="muted" id="boxScoreSubtitle"></p>
+    <div class="box-score-cols" id="boxScoreCols"></div>
+    <button class="box-score-close" onclick="closeBoxScore()">Close</button>
+  </div>
+</div>
 <script>
   let selectedDivisionIds = new Set(); // multi-select state for the division filter
   let lastLoadedReports = []; // the most recent server response - "Only show games with a report" filters THIS client-side, no re-fetch
@@ -303,6 +347,71 @@
     return `<span class="card-count ${colorClass}">${count}</span>`;
   }
 
+  function reasonLabelFor(r) {
+    return r.forfeit_reason ? r.forfeit_reason.charAt(0).toUpperCase() + r.forfeit_reason.slice(1) : null;
+  }
+
+  // Plain "3 - 1" text (no markup) - shared by the table's Score cell and
+  // the mobile card's centered score line.
+  function scoreText(r) {
+    if (r.is_forfeit) return reasonLabelFor(r);
+    if (r.has_report) return r.team1_score + ' - ' + r.team2_score;
+    if (r.se_home_score != null && r.se_away_score != null) return r.se_home_score + ' - ' + r.se_away_score;
+    return '—';
+  }
+
+  // A Box Score button below the score, opening the events modal - only
+  // meaningful once a real report exists (forfeits and not-yet-reported
+  // games have no events to show).
+  function boxScoreButtonHtml(r) {
+    if (!r.has_report || r.is_forfeit) return '';
+    return `<button class="push-score-btn" style="margin-top:6px;" onclick="openBoxScore('${escapeJs(r.game_id)}')">Box Score</button>`;
+  }
+
+  // Shared between the table's Actions column and the mobile card's
+  // actions area - same markup, same behavior, just rendered in two
+  // different containers depending on screen width.
+  function actionsHtml(r) {
+    if (r.is_forfeit) {
+      return `
+        <select onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.value)" style="font-size:11.5px; padding:3px 5px; border:1px solid var(--border); border-radius:5px;">
+          <option value="forfeit" ${r.forfeit_reason === 'forfeit' ? 'selected' : ''}>Forfeit</option>
+          <option value="postponed" ${r.forfeit_reason === 'postponed' ? 'selected' : ''}>Postponed</option>
+          <option value="rainout" ${r.forfeit_reason === 'rainout' ? 'selected' : ''}>Rainout</option>
+          <option value="">— Clear —</option>
+        </select>
+        <div style="margin-top:5px; display:flex; align-items:center; gap:5px; font-size:11.5px;">
+          <span class="muted">Pay ref?</span>
+          <select onchange="setRefereePaid('${escapeJs(r.game_id)}', this.value)" style="font-size:11.5px; padding:2px 4px; border:1px solid var(--border); border-radius:5px;">
+            <option value="" ${r.referee_paid == null ? 'selected' : ''}>—</option>
+            <option value="true" ${r.referee_paid === true ? 'selected' : ''}>Yes</option>
+            <option value="false" ${r.referee_paid === false ? 'selected' : ''}>No</option>
+          </select>
+        </div>
+      `;
+    }
+    if (r.has_report) {
+      return `
+        <button class="push-score-btn" onclick="pushScore('${escapeJs(r.game_id)}', this)">Push Score to SE</button>
+        <span class="push-score-result" style="display:block; font-size:11px; margin-top:3px;"></span>
+        ${r.incident_report ? `<button class="push-score-btn" style="margin-top:4px;" onclick="toggleIncidentReport('${escapeJs(r.game_id)}')">View Incident Report</button>` : ''}
+      `;
+    }
+    return `
+      <span class="muted" style="font-size:12px; display:block;">No report yet</span>
+      <label style="display:flex; align-items:center; gap:5px; font-size:11.5px; font-weight:400; margin-top:4px; cursor:pointer;">
+        <input type="checkbox" ${r.flagged_external ? 'checked' : ''} onchange="toggleExternalFlag('${escapeJs(r.game_id)}', this.checked)" />
+        MO report received
+      </label>
+      <select onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.value)" style="font-size:11.5px; padding:3px 5px; margin-top:4px; border:1px solid var(--border); border-radius:5px;">
+        <option value="" selected>Forfeit/Postponed/Rainout?</option>
+        <option value="forfeit">Forfeit</option>
+        <option value="postponed">Postponed</option>
+        <option value="rainout">Rainout</option>
+      </select>
+    `;
+  }
+
   function renderReports(reports) {
     const box = document.getElementById('reportsBox');
     if (!reports.length) {
@@ -310,7 +419,7 @@
       return;
     }
     box.innerHTML = `
-      <div style="overflow-x:auto;">
+      <div class="table-wrap" style="overflow-x:auto;">
       <table>
         <thead><tr>
           <th>Match Report</th><th>Game Date</th><th>Gender</th><th>Division</th>
@@ -323,9 +432,6 @@
             const rowStyle = r.is_forfeit ? ' style="background:#F4F6FA;"'
               : !r.has_report ? (r.flagged_external ? ' style="background:#FDF0DD;"' : ' style="background:#FBEAE8;"')
               : '';
-            const reasonLabel = r.forfeit_reason
-              ? r.forfeit_reason.charAt(0).toUpperCase() + r.forfeit_reason.slice(1)
-              : null;
             return `
             <tr${rowStyle}>
               <td style="font-size:11.5px; white-space:nowrap;">${r.game_id ? `<a href="https://octopus-app-ilp92.ondigitalocean.app/?game=${encodeURIComponent(r.game_id)}" target="_blank" rel="noopener" style="color:var(--navy);">Match Report URL</a>` : '—'}</td>
@@ -335,50 +441,19 @@
               <td style="text-align:right;">${escapeHtml(r.team1_name)}</td>
               <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team1_yellow_count, 'yc-count')}</td>
               <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team1_red_count, 'rc-count')}</td>
-              <td style="text-align:center; font-weight:700; white-space:nowrap;">${
-                r.is_forfeit ? escapeHtml(reasonLabel)
-                : r.has_report ? r.team1_score + ' - ' + r.team2_score
-                : (r.se_home_score != null && r.se_away_score != null)
-                  ? `<span style="background:#FFF6D6; padding:2px 6px; border-radius:4px;">${escapeHtml(r.se_home_score)} - ${escapeHtml(r.se_away_score)}</span><div class="muted" style="font-weight:400; font-size:10px; margin-top:2px;">(from SE/MO)</div>`
-                  : '—'
-              }</td>
+              <td style="text-align:center; font-weight:700; white-space:nowrap;">
+                ${r.is_forfeit ? escapeHtml(scoreText(r))
+                  : r.has_report ? escapeHtml(scoreText(r))
+                  : (r.se_home_score != null && r.se_away_score != null)
+                    ? `<span style="background:#FFF6D6; padding:2px 6px; border-radius:4px;">${escapeHtml(scoreText(r))}</span><div class="muted" style="font-weight:400; font-size:10px; margin-top:2px;">(from SE/MO)</div>`
+                    : escapeHtml(scoreText(r))
+                }
+                <div>${boxScoreButtonHtml(r)}</div>
+              </td>
               <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team2_red_count, 'rc-count')}</td>
               <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team2_yellow_count, 'yc-count')}</td>
               <td>${escapeHtml(r.team2_name)}</td>
-              <td>
-                ${r.is_forfeit ? `
-                  <select onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.value)" style="font-size:11.5px; padding:3px 5px; border:1px solid var(--border); border-radius:5px;">
-                    <option value="forfeit" ${r.forfeit_reason === 'forfeit' ? 'selected' : ''}>Forfeit</option>
-                    <option value="postponed" ${r.forfeit_reason === 'postponed' ? 'selected' : ''}>Postponed</option>
-                    <option value="rainout" ${r.forfeit_reason === 'rainout' ? 'selected' : ''}>Rainout</option>
-                    <option value="">— Clear —</option>
-                  </select>
-                  <div style="margin-top:5px; display:flex; align-items:center; gap:5px; font-size:11.5px;">
-                    <span class="muted">Pay ref?</span>
-                    <select onchange="setRefereePaid('${escapeJs(r.game_id)}', this.value)" style="font-size:11.5px; padding:2px 4px; border:1px solid var(--border); border-radius:5px;">
-                      <option value="" ${r.referee_paid == null ? 'selected' : ''}>—</option>
-                      <option value="true" ${r.referee_paid === true ? 'selected' : ''}>Yes</option>
-                      <option value="false" ${r.referee_paid === false ? 'selected' : ''}>No</option>
-                    </select>
-                  </div>
-                ` : r.has_report ? `
-                  <button class="push-score-btn" onclick="pushScore('${escapeJs(r.game_id)}', this)">Push Score to SE</button>
-                  <span class="push-score-result" style="display:block; font-size:11px; margin-top:3px;"></span>
-                  ${r.incident_report ? `<button class="push-score-btn" style="margin-top:4px;" onclick="toggleIncidentReport('${escapeJs(r.game_id)}')">View Incident Report</button>` : ''}
-                ` : `
-                  <span class="muted" style="font-size:12px; display:block;">No report yet</span>
-                  <label style="display:flex; align-items:center; gap:5px; font-size:11.5px; font-weight:400; margin-top:4px; cursor:pointer;">
-                    <input type="checkbox" ${r.flagged_external ? 'checked' : ''} onchange="toggleExternalFlag('${escapeJs(r.game_id)}', this.checked)" />
-                    MO report received
-                  </label>
-                  <select onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.value)" style="font-size:11.5px; padding:3px 5px; margin-top:4px; border:1px solid var(--border); border-radius:5px;">
-                    <option value="" selected>Forfeit/Postponed/Rainout?</option>
-                    <option value="forfeit">Forfeit</option>
-                    <option value="postponed">Postponed</option>
-                    <option value="rainout">Rainout</option>
-                  </select>
-                `}
-              </td>
+              <td>${actionsHtml(r)}</td>
             </tr>
             ${r.incident_report ? `
             <tr id="incident-row-${escapeJs(r.game_id)}" style="display:none;">
@@ -393,7 +468,74 @@
         </tbody>
       </table>
       </div>
+
+      <div class="mr-cards">
+        ${reports.map(r => `
+          <div class="mr-card">
+            <div class="mr-card-header">
+              <a class="mr-card-report-link" href="${r.game_id ? 'https://octopus-app-ilp92.ondigitalocean.app/?game=' + encodeURIComponent(r.game_id) : '#'}" target="_blank" rel="noopener">${r.game_id ? 'Match Report URL' : '—'}</a>
+              <div class="mr-card-teams">
+                <div>${escapeHtml(r.team1_name)}</div>
+                <div>${escapeHtml(r.team2_name)}</div>
+              </div>
+            </div>
+            <div class="mr-card-meta">${r.game_date ? new Date(r.game_date).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short' }) + ' ET' : '—'} · ${escapeHtml(r.gender || '')} · ${escapeHtml(r.division_name || '')}</div>
+            <div class="mr-card-center">
+              <div class="mr-card-score">${escapeHtml(scoreText(r))}${!r.has_report && !r.is_forfeit && r.se_home_score != null && r.se_away_score != null ? ' <span class="muted" style="font-weight:400; font-size:11px;">(from SE/MO)</span>' : ''}</div>
+              ${!r.is_forfeit ? `
+                <div class="mr-card-cardcounts">
+                  <span>${escapeHtml(r.team1_name)}: ${cardCount(r.team1_yellow_count, 'yc-count')}${cardCount(r.team1_red_count, 'rc-count')}${(!r.team1_yellow_count && !r.team1_red_count) ? '<span class="muted">none</span>' : ''}</span>
+                  <span>${escapeHtml(r.team2_name)}: ${cardCount(r.team2_yellow_count, 'yc-count')}${cardCount(r.team2_red_count, 'rc-count')}${(!r.team2_yellow_count && !r.team2_red_count) ? '<span class="muted">none</span>' : ''}</span>
+                </div>
+              ` : ''}
+              ${boxScoreButtonHtml(r)}
+            </div>
+            <div class="mr-card-actions">${actionsHtml(r)}</div>
+          </div>
+        `).join('')}
+      </div>
     `;
+  }
+
+  // Match events for the box score modal - home (Team 1) on the left,
+  // away (Team 2) on the right, sorted by minute (nulls last, same as the
+  // server-side ordering).
+  function openBoxScore(gameId) {
+    const r = lastLoadedReports.find(x => x.game_id === gameId);
+    if (!r) return;
+
+    document.getElementById('boxScoreTitle').textContent = r.team1_name + ' vs ' + r.team2_name;
+    document.getElementById('boxScoreSubtitle').textContent =
+      (r.game_date ? new Date(r.game_date).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'medium', timeStyle: 'short' }) + ' ET' : '') +
+      ' — Final: ' + scoreText(r);
+
+    const eventLine = (e) => {
+      const icon = e.event_type === 'Goal' ? '⚽' : e.event_type === 'Red Card' ? '🟥' : '🟨';
+      const minute = e.minute != null ? e.minute + "'" : '';
+      const reason = (e.event_type !== 'Goal' && e.reason) ? ' — ' + escapeHtml(e.reason) : (e.reason === 'Own Goal' ? ' (Own Goal)' : '');
+      return `<div class="box-score-event"><span>${icon}</span><span>${escapeHtml(e.name)}${reason}</span>${minute ? `<span class="muted" style="margin-left:auto;">${minute}</span>` : ''}</div>`;
+    };
+
+    const entries = r.entries || [];
+    const homeEvents = entries.filter(e => e.team_id === r.team1_id);
+    const awayEvents = entries.filter(e => e.team_id === r.team2_id);
+
+    document.getElementById('boxScoreCols').innerHTML = `
+      <div class="box-score-col">
+        <h4>${escapeHtml(r.team1_name)}</h4>
+        ${homeEvents.length ? homeEvents.map(eventLine).join('') : '<p class="muted" style="font-size:12.5px;">No events recorded.</p>'}
+      </div>
+      <div class="box-score-col">
+        <h4>${escapeHtml(r.team2_name)}</h4>
+        ${awayEvents.length ? awayEvents.map(eventLine).join('') : '<p class="muted" style="font-size:12.5px;">No events recorded.</p>'}
+      </div>
+    `;
+
+    document.getElementById('boxScoreOverlay').classList.add('open');
+  }
+
+  function closeBoxScore() {
+    document.getElementById('boxScoreOverlay').classList.remove('open');
   }
 
   function escapeJs(str) {

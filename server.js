@@ -860,12 +860,30 @@ const server = http.createServer(async (req, res) => {
       `, reportParams);
       const reportByGameId = new Map(reportResult.rows.map(r => [r.game_id, r]));
 
-      const [flaggedResult, forfeitResult] = await Promise.all([
+      // Per-event detail (who scored/carded, minute, reason) for the box
+      // score modal - only ever needed for games that actually have a real
+      // report, so scoped to just those game_ids rather than the whole
+      // visible range.
+      const reportedGameIds = [...reportByGameId.keys()];
+      const [flaggedResult, forfeitResult, entriesResult] = await Promise.all([
         pool.query('SELECT game_id FROM external_report_flags'),
         pool.query('SELECT game_id, reason, referee_paid FROM forfeit_flags'),
+        reportedGameIds.length > 0
+          ? pool.query(
+              `SELECT game_id, team_id, team_name, person_type, name, event_type, minute, reason
+               FROM match_report_entries WHERE game_id = ANY($1)
+               ORDER BY minute ASC NULLS LAST`,
+              [reportedGameIds]
+            )
+          : Promise.resolve({ rows: [] }),
       ]);
       const forfeitInfoByGameId = new Map(forfeitResult.rows.map(r => [r.game_id, { reason: r.reason, referee_paid: r.referee_paid }]));
       const flaggedIds = new Set(flaggedResult.rows.map(r => r.game_id));
+      const entriesByGameId = new Map();
+      for (const e of entriesResult.rows) {
+        if (!entriesByGameId.has(e.game_id)) entriesByGameId.set(e.game_id, []);
+        entriesByGameId.get(e.game_id).push(e);
+      }
 
       let mergedRows;
 
@@ -951,6 +969,9 @@ const server = http.createServer(async (req, res) => {
           // A forfeit/postponed/rainout counts as "entered" even with no
           // real score data - there's nothing more to report for it.
           has_report: r.team1_score != null || r.team2_score != null || isForfeit,
+          // Goals/cards for the box score modal - empty for games with no
+          // real report (forfeits, or nothing submitted yet).
+          entries: entriesByGameId.get(r.game_id) || [],
         };
       });
 
@@ -1207,15 +1228,20 @@ const server = http.createServer(async (req, res) => {
       // match_report_entries at all, since they're per-GAME, not tied to
       // one specific player/team. Shaped to fit the same column structure
       // as above so the frontend can render both without special-casing.
-      // Only the date filters apply (a report isn't tied to one team or
-      // player). Gated by its own includeIncidentReports toggle, independent
-      // of includeRed/includeYellow.
+      // Only the date filters (and now reviewStatus) apply - a report isn't
+      // tied to one team or player. Gated by its own includeIncidentReports
+      // toggle, independent of includeRed/includeYellow.
       const incidentConditions = ['s.incident_report IS NOT NULL'];
       const incidentParams = [];
       let incidentParamIdx = 1;
       if (dateFrom) { incidentConditions.push(`s.game_date >= $${incidentParamIdx++}`); incidentParams.push(dateFrom); }
       if (dateTo) { incidentConditions.push(`s.game_date <= $${incidentParamIdx++}`); incidentParams.push(dateTo); }
+      if (reviewStatus === 'pending') { incidentConditions.push(`(ir.status IS NULL OR ir.status = 'pending')`); }
+      else if (reviewStatus === 'reviewed') { incidentConditions.push(`ir.status = 'reviewed'`); }
 
+      // Incident reports now have their own pending/reviewed workflow via
+      // incident_report_reviews, keyed by game_id (they aren't tied to one
+      // match_report_entries row, so they can't use misconduct_reviews).
       const incidentQuery = `
         SELECT
           ('incident-' || s.game_id) AS entry_id, s.game_id, NULL AS team_id,
@@ -1223,37 +1249,30 @@ const server = http.createServer(async (req, res) => {
           NULL AS profile_id, s.gender AS name, 'Report' AS event_type, NULL AS minute,
           'Incident Report' AS reason, NULL AS supplemental_report,
           s.game_date, s.gender,
-          NULL AS status, NULL AS committee_notes, NULL AS reviewed_by, NULL AS reviewed_at,
+          ir.status, ir.committee_notes, ir.reviewed_by, ir.reviewed_at,
           NULL AS games_suspended, NULL AS standard_games, NULL AS games_served,
           s.incident_report
         FROM match_report_scores s
+        LEFT JOIN incident_report_reviews ir ON ir.game_id = s.game_id
         WHERE ${incidentConditions.join(' AND ')}
       `;
 
-      // Incident reports have no review-status workflow of their own (no
-      // misconduct_reviews row is ever created for them), so a specific
-      // pending/reviewed filter excludes them entirely rather than showing
-      // them under a status they don't actually have.
-      const includeIncidentRows = includeIncidentReports && reviewStatus === 'all';
-
       const [result, incidentResult] = await Promise.all([
         eventTypes.length > 0 ? pool.query(query, params) : Promise.resolve({ rows: [] }),
-        includeIncidentRows ? pool.query(incidentQuery, incidentParams) : Promise.resolve({ rows: [] }),
+        includeIncidentReports ? pool.query(incidentQuery, incidentParams) : Promise.resolve({ rows: [] }),
       ]);
       const combinedRows = [...result.rows, ...incidentResult.rows].sort((a, b) => {
         const dateA = a.game_date ? new Date(a.game_date).getTime() : -Infinity;
         const dateB = b.game_date ? new Date(b.game_date).getTime() : -Infinity;
         return dateB - dateA;
       });
-      const rowsForStatus = combinedRows;
-      // No review row yet = implicitly 'pending' - reflect that in the response
-      // rather than leaving status as null for the frontend to special-case.
-      // Incident report rows are excluded from this default - they have no
-      // real review workflow, so leaving status null (rather than a
-      // misleading 'pending') lets the frontend render them differently.
-      const rows = rowsForStatus.map(row => ({
+      // No review row yet = implicitly 'pending' - reflect that in the
+      // response rather than leaving status null for the frontend to
+      // special-case. Now applies uniformly to cards AND incident reports,
+      // since both have a real pending/reviewed workflow.
+      const rows = combinedRows.map(row => ({
         ...row,
-        status: row.event_type === 'Report' ? row.status : (row.status || 'pending'),
+        status: row.status || 'pending',
       }));
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1263,6 +1282,60 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));
     }
+    return;
+  }
+
+  // POST /api/misconduct/incident/:gameId/review — update an Incident
+  // Report's pending/reviewed status and committee notes. No suspension
+  // logic here at all (incident reports never have one) - matched by
+  // game_id, not an entry_id, since an incident report isn't tied to one
+  // match_report_entries row. Kept as its own endpoint/path rather than
+  // reusing /api/misconduct/:entryId/review, whose :entryId is numeric-only
+  // and whose logic assumes a real match_report_entries row exists.
+  const incidentReviewMatch = url.pathname.match(/^\/api\/misconduct\/incident\/([^/]+)\/review$/);
+  if (req.method === 'POST' && incidentReviewMatch) {
+    const session = await getSession(cookies.admin_session);
+    if (!session) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Not logged in' }));
+    }
+    const gameId = decodeURIComponent(incidentReviewMatch[1]);
+
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', async () => {
+      let payload;
+      try {
+        payload = JSON.parse(body);
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'Invalid JSON body' }));
+      }
+
+      const { status, committeeNotes } = payload;
+      const VALID_STATUSES = ['pending', 'reviewed'];
+      if (!VALID_STATUSES.includes(status)) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'status must be one of: ' + VALID_STATUSES.join(', ') }));
+      }
+
+      try {
+        await pool.query(
+          `INSERT INTO incident_report_reviews (game_id, status, committee_notes, reviewed_by, reviewed_at, updated_at)
+           VALUES ($1, $2, $3, $4, now(), now())
+           ON CONFLICT (game_id) DO UPDATE SET
+             status = EXCLUDED.status, committee_notes = EXCLUDED.committee_notes,
+             reviewed_by = EXCLUDED.reviewed_by, reviewed_at = now(), updated_at = now()`,
+          [gameId, status, committeeNotes || null, session.name]
+        );
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      } catch (err) {
+        console.error('[api/misconduct/incident/review POST] Error:', err.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
     return;
   }
 

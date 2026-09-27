@@ -219,7 +219,7 @@
           <td>${isReport ? '—' : (row.event_type === 'Red Card' && row.games_served != null
             ? `${row.games_served}${row.games_served >= (row.games_suspended != null ? row.games_suspended : row.standard_games) ? ' <span style="color:var(--success, #1F7A4D);">✓</span>' : ''}`
             : '—')}</td>
-          <td>${isReport ? '' : `<span class="badge badge-${row.status}">${row.status.replace('_', ' ')}</span>`}</td>
+          <td><span class="badge badge-${row.status}">${row.status.replace('_', ' ')}</span></td>
         </tr>
       `;
       const detailHtml = String(expandedEntryId) === String(row.entry_id)
@@ -234,15 +234,57 @@
     renderResults();
   }
 
-  // Incident reports have no review workflow (no real entry_id tied to
-  // misconduct_reviews/suspensions) - just show the report text, read-only.
+  // Incident reports get their own pending/reviewed workflow (via
+  // incident_report_reviews, keyed by game_id) - no suspension fields at
+  // all, since an incident report never has one.
   function renderIncidentReportPanel(row) {
     return `
       <div class="detail-panel">
         <div class="section-label" style="margin-top:0;">Incident Report</div>
-        <p style="white-space:pre-wrap; margin:0;">${escapeHtml(row.incident_report)}</p>
+        <p style="white-space:pre-wrap; margin:0 0 12px;">${escapeHtml(row.incident_report)}</p>
+
+        ${row.reviewed_by ? `<p class="muted" style="margin:0 0 10px;">Last reviewed by ${escapeHtml(row.reviewed_by)} on ${new Date(row.reviewed_at).toLocaleString()}</p>` : ''}
+
+        <div class="section-label">Status</div>
+        <select id="statusInput-${row.entry_id}">
+          <option value="pending" ${row.status === 'pending' ? 'selected' : ''}>Pending</option>
+          <option value="reviewed" ${row.status === 'reviewed' ? 'selected' : ''}>Reviewed</option>
+        </select>
+
+        <div class="section-label">Committee Notes</div>
+        <textarea id="notesInput-${row.entry_id}" placeholder="Internal notes...">${escapeHtml(row.committee_notes || '')}</textarea>
+
+        <div style="margin-top:12px; display:flex; align-items:center; gap:10px;">
+          <button onclick="saveIncidentReview('${escapeJs(row.game_id)}', '${escapeJs(row.entry_id)}')">Save</button>
+          <span id="saveResult-${row.entry_id}" class="muted"></span>
+        </div>
       </div>
     `;
+  }
+
+  async function saveIncidentReview(gameId, entryId) {
+    const resultEl = document.getElementById('saveResult-' + entryId);
+    resultEl.textContent = 'Saving...';
+
+    const status = document.getElementById('statusInput-' + entryId).value;
+    const committeeNotes = document.getElementById('notesInput-' + entryId).value.trim();
+
+    try {
+      const res = await fetch('/api/misconduct/incident/' + encodeURIComponent(gameId) + '/review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status, committeeNotes }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Unknown error');
+
+      resultEl.textContent = 'Saved.';
+      await loadMisconduct(); // refresh so the badge/status reflects the change
+      expandedEntryId = entryId;
+      renderResults();
+    } catch (e) {
+      resultEl.innerHTML = '<span class="err">Failed: ' + escapeHtml(e.message) + '</span>';
+    }
   }
 
   function renderDetailPanel(row) {
@@ -352,6 +394,14 @@
 
   function escapeHtml(str) {
     return String(str == null ? '' : str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  // For safely embedding a value inside a single-quoted string in an
+  // inline onclick attribute (e.g. game_id / entry_id values) - distinct
+  // from escapeHtml, which escapes for HTML text/attribute content, not JS
+  // string literals.
+  function escapeJs(str) {
+    return String(str == null ? '' : str).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
   }
 
   init();
