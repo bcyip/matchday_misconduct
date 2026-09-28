@@ -674,11 +674,16 @@ const server = http.createServer(async (req, res) => {
         `),
       ]);
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      const divisions = divisionsResult.rows.map(d => ({
-        division_id: d.division_id,
-        division_name: (DIVISION_LOOKUP[d.division_id] && DIVISION_LOOKUP[d.division_id].name) || d.division_id,
-        gender: (DIVISION_LOOKUP[d.division_id] && DIVISION_LOOKUP[d.division_id].gender) || null,
-      })).sort((a, b) => a.division_name.localeCompare(b.division_name) || (a.gender || '').localeCompare(b.gender || ''));
+      // Same Ozark exclusion as the main /api/match-reports endpoint - it
+      // shouldn't even be selectable as a division filter here.
+      const OZARK_DIVISION_IDS = ['6a4e96e46b8d1e01201ee2ce', '6a4e9b904b609600f0e70d42'];
+      const divisions = divisionsResult.rows
+        .filter(d => !OZARK_DIVISION_IDS.includes(d.division_id))
+        .map(d => ({
+          division_id: d.division_id,
+          division_name: (DIVISION_LOOKUP[d.division_id] && DIVISION_LOOKUP[d.division_id].name) || d.division_id,
+          gender: (DIVISION_LOOKUP[d.division_id] && DIVISION_LOOKUP[d.division_id].gender) || null,
+        })).sort((a, b) => a.division_name.localeCompare(b.division_name) || (a.gender || '').localeCompare(b.gender || ''));
       res.end(JSON.stringify({ divisions, teams: teamsResult.rows }));
     } catch (err) {
       console.error('[api/match-reports/filter-options] Error:', err.message);
@@ -937,6 +942,15 @@ const server = http.createServer(async (req, res) => {
       for (const r of reportResult.rows) {
         if (!mergedIds.has(r.game_id)) mergedRows.push(r);
       }
+
+      // Ozark (Men & Women) is excluded from Match Reports entirely - never
+      // shown, never counted toward the summary totals - regardless of any
+      // division/conference/gender/team filter the user picks. Matches the
+      // same "hide Ozark" behavior already applied elsewhere (e.g. the
+      // schedule monitor's Ozark toggle), but hardcoded here rather than a
+      // toggle since it should never show up on this page at all.
+      const OZARK_DIVISION_IDS = ['6a4e96e46b8d1e01201ee2ce', '6a4e9b904b609600f0e70d42'];
+      mergedRows = mergedRows.filter(r => !OZARK_DIVISION_IDS.includes(r.division_id));
 
       // Apply the same filters to the merged set, regardless of whether a
       // report exists for a given game.
