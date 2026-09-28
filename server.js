@@ -872,7 +872,7 @@ const server = http.createServer(async (req, res) => {
       const reportedGameIds = [...reportByGameId.keys()];
       const [flaggedResult, forfeitResult, entriesResult] = await Promise.all([
         pool.query('SELECT game_id FROM external_report_flags'),
-        pool.query('SELECT game_id, reason, referee_paid FROM forfeit_flags'),
+        pool.query('SELECT game_id, reason, referee_paid, charge_status FROM forfeit_flags'),
         reportedGameIds.length > 0
           ? pool.query(
               `SELECT game_id, team_id, team_name, person_type, name, event_type, minute, reason
@@ -882,7 +882,7 @@ const server = http.createServer(async (req, res) => {
             )
           : Promise.resolve({ rows: [] }),
       ]);
-      const forfeitInfoByGameId = new Map(forfeitResult.rows.map(r => [r.game_id, { reason: r.reason, referee_paid: r.referee_paid }]));
+      const forfeitInfoByGameId = new Map(forfeitResult.rows.map(r => [r.game_id, { reason: r.reason, referee_paid: r.referee_paid, charge_status: r.charge_status }]));
       const flaggedIds = new Set(flaggedResult.rows.map(r => r.game_id));
       const entriesByGameId = new Map();
       for (const e of entriesResult.rows) {
@@ -979,6 +979,7 @@ const server = http.createServer(async (req, res) => {
           is_forfeit: isForfeit,
           forfeit_reason: forfeitReason, // 'forfeit' | 'postponed' | 'rainout' | null
           referee_paid: forfeitInfo ? forfeitInfo.referee_paid : null, // true | false | null (undecided)
+          charge_status: forfeitInfo ? forfeitInfo.charge_status : null, // 'teams_charged' | 'usccs_charged' | 'no_charge' | null (undecided)
           // SportsEngine's own score - kept SEPARATE from our own report
           // score (team1_score/team2_score above) deliberately. Only
           // available for games that have actually been synced.
@@ -1137,6 +1138,57 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ success: true }));
       } catch (err) {
         console.error('[api/match-reports set-referee-paid] Error:', err.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // POST /api/match-reports/:gameId/set-charge-status — independent of both
+  // the forfeit/postponed/rainout reason and the referee-paid decision,
+  // same reasoning as set-referee-paid: who gets charged for a
+  // postponed/cancelled game is often decided separately and later.
+  // Body: { chargeStatus: 'teams_charged'|'usccs_charged'|'no_charge'|null }.
+  // Only updates a row that already exists (a reason must already be set)
+  // - a charge decision is meaningless without one.
+  const setChargeStatusMatch = url.pathname.match(/^\/api\/match-reports\/([^/]+)\/set-charge-status$/);
+  if (req.method === 'POST' && setChargeStatusMatch) {
+    const session = await getSession(cookies.admin_session);
+    if (!session) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Not logged in' }));
+    }
+    const gameId = decodeURIComponent(setChargeStatusMatch[1]);
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', async () => {
+      let payload;
+      try {
+        payload = JSON.parse(body);
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'Invalid JSON body' }));
+      }
+      try {
+        const ALLOWED_CHARGE_STATUSES = ['teams_charged', 'usccs_charged', 'no_charge'];
+        const chargeStatus = payload.chargeStatus || null;
+        if (chargeStatus != null && !ALLOWED_CHARGE_STATUSES.includes(chargeStatus)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'chargeStatus must be one of: ' + ALLOWED_CHARGE_STATUSES.join(', ') + ', or null' }));
+        }
+        const result = await pool.query(
+          'UPDATE forfeit_flags SET charge_status = $1 WHERE game_id = $2',
+          [chargeStatus, gameId]
+        );
+        if (result.rowCount === 0) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'No forfeit/postponed/rainout reason set for this game yet.' }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      } catch (err) {
+        console.error('[api/match-reports set-charge-status] Error:', err.message);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: err.message }));
       }
