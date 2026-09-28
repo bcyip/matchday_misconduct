@@ -110,7 +110,7 @@
           <option value="all">All Games</option>
           <option value="has_report">USCCS Report</option>
           <option value="mo_report_only">MO Report</option>
-          <option value="no_report_registered">No Report</option>
+          <option value="no_report_registered">No USCCS Report</option>
         </select>
       </div>
     </div>
@@ -320,7 +320,7 @@
       <strong>${totalGames}</strong> total games &nbsp;·&nbsp;
       <strong>${usccsReport}</strong> USCCS report &nbsp;·&nbsp;
       <strong>${moReport}</strong> MO report &nbsp;·&nbsp;
-      <strong>${noReport}</strong> no report
+      <strong>${noReport}</strong> no USCCS report
     `;
   }
 
@@ -455,12 +455,14 @@
     }
     if (compact) {
       return `
-        <div style="display:flex; align-items:center; justify-content:center; gap:8px; flex-wrap:wrap;">
-          <span class="muted">No report yet</span>
+        <div style="display:flex; align-items:center; justify-content:center; gap:6px; flex-wrap:wrap;">
+          <span class="muted">No USCCS Report</span>
+          <span class="muted">|</span>
           <label style="display:flex; align-items:center; gap:4px; font-weight:400; cursor:pointer;">
             <input type="checkbox" ${r.flagged_external ? 'checked' : ''} onchange="toggleExternalFlag('${escapeJs(r.game_id)}', this.checked)" />
             MO report
           </label>
+          <span class="muted">|</span>
           <select onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.value)" style="font-size:11px; padding:2px 4px; border:1px solid var(--border); border-radius:5px;">
             <option value="" selected>Forfeit/Postponed/Rainout?</option>
             <option value="forfeit">Forfeit</option>
@@ -471,7 +473,7 @@
       `;
     }
     return `
-      <span class="muted" style="font-size:12px; display:block;">No report yet</span>
+      <span class="muted" style="font-size:12px; display:block;">No USCCS Report</span>
       <label style="display:flex; align-items:center; gap:5px; font-size:11.5px; font-weight:400; margin-top:4px; cursor:pointer;">
         <input type="checkbox" ${r.flagged_external ? 'checked' : ''} onchange="toggleExternalFlag('${escapeJs(r.game_id)}', this.checked)" />
         MO report received
