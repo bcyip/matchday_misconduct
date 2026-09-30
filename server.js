@@ -18,6 +18,23 @@
 //                                     what's sent on both the authorize and token-exchange steps)
 //   DATABASE_URL                   - same Supabase/Postgres instance matchday uses
 //   PORT                           - (optional) most hosts set this automatically
+//   RIBBON_SYNC_INTERVAL_MINUTES   - (optional) how often the automatic background
+//                                     sync below runs, defaults to 60
+//
+// AUTOMATIC BACKGROUND SYNC: this app runs a SportsEngine pull
+// automatically on a timer (see runAutomaticScheduleSync / server.listen at
+// the bottom), which upserts into the shared schedule_games_cache table
+// (runScheduleSyncForRange, below). This was moved here from the standalone
+// match-ribbon app, which used to run its own separate background sync
+// against the same SE_DATA_REFRESH_TOKEN-style credentials and the same
+// table - consolidating it here means only ONE process talks to
+// SportsEngine on a timer, and the ribbon app is now a pure read-only
+// reader of this table (see that app's own comments). There used to also be
+// a manually-triggered "Sync Historical Games" button on the match-reports
+// page for on-demand/backfill syncs; it was removed once the automatic
+// timer made it redundant for normal operation. If an ad-hoc backfill is
+// ever needed again (e.g. a wide historical range), runScheduleSyncForRange
+// is still there to call from a one-off script or a re-added endpoint.
 //
 // CONFIRMED DEPLOYMENT CONSTRAINT: the SportsEngine app (client_id) used by
 // this whole project allows only ONE registered redirect URI at a time - not
@@ -57,6 +74,14 @@ const SE_ORG_ID = process.env.SE_ORG_ID;
 const MATCHDAY_APP_URL = process.env.MATCHDAY_APP_URL;
 const ADMIN_BASE_URL = process.env.ADMIN_BASE_URL;
 const REDIRECT_URI = ADMIN_BASE_URL ? ADMIN_BASE_URL.replace(/\/$/, '') + '/oauth/callback' : null;
+
+// How often the automatic background sync (moved here from the match-ribbon
+// app - see header comment) runs, in minutes.
+const RIBBON_SYNC_INTERVAL_MINUTES = parseFloat(process.env.RIBBON_SYNC_INTERVAL_MINUTES || '60');
+// How many days back the automatic sync pulls each run, +1 day of buffer -
+// matches the match-ribbon app's own 7-day display window (6 + today), so
+// its cache stays fully covered even right at a sync boundary.
+const RIBBON_SYNC_DAYS_BACK = 6;
 
 const SESSION_LIFETIME_MS = 8 * 60 * 60 * 1000; // 8 hours
 
@@ -144,6 +169,23 @@ const pool = new Pool({
 pool.on('error', (err) => {
   console.error('[postgres] Unexpected error on idle client:', err.message);
 });
+
+// Additive, idempotent migration for the team-logo columns the match-ribbon
+// app added to this shared table. Run at startup (see server.listen) before
+// either sync path writes to schedule_games_cache, so the columns always
+// exist by the time the ribbon app - or this app's own reads - reference
+// them. Safe to run every boot.
+async function ensureLogoColumns() {
+  try {
+    await pool.query(`
+      ALTER TABLE schedule_games_cache
+        ADD COLUMN IF NOT EXISTS home_team_logo_url text,
+        ADD COLUMN IF NOT EXISTS away_team_logo_url text
+    `);
+  } catch (err) {
+    console.error('[schedule-sync] Could not ensure logo columns exist:', err.message);
+  }
+}
 
 // ---------- Cookie helpers (manual - no new dependency) ----------
 
@@ -399,7 +441,7 @@ const SE_EVENTS_QUERY = `
     events(organizationId: $orgId, from: $from, to: $to, calendarEventType: GAME, page: $page, perPage: $perPage) {
       results {
         id
-        eventTeams { name score team { id program { primaryName } divisionId } homeTeam }
+        eventTeams { name score team { id program { primaryName } divisionId brand { logoUrl } } homeTeam }
         start
         subvenue { name venueId venueName }
         subvenueId
@@ -441,6 +483,8 @@ function extractGameInfo(event) {
     awayTeam: (away && away.name) || null,
     homeTeamId: (home && home.team && home.team.id) || null,
     awayTeamId: (away && away.team && away.team.id) || null,
+    homeTeamLogoUrl: (home && home.team && home.team.brand && home.team.brand.logoUrl) || null,
+    awayTeamLogoUrl: (away && away.team && away.team.brand && away.team.brand.logoUrl) || null,
     divisionId,
     divisionName: (divisionInfo && divisionInfo.name) || null,
     gender,
@@ -525,7 +569,88 @@ async function fetchGamesInRange(from, to) {
   return deduped.map(extractGameInfo);
 }
 
+// Called by the automatic background timer (see runAutomaticScheduleSync /
+// server.listen) - fetches the given range from SportsEngine, upserts into
+// schedule_games_cache (including the team logo columns), and auto-flags
+// "MO report received" for any game where SportsEngine already has a score.
+// Never syncs past the end of today (Eastern), regardless of what range is
+// passed in - this cache is for history that's already happened.
+async function runScheduleSyncForRange(rangeFrom, rangeTo) {
+  const endOfTodayEastern = getEndOfTodayEastern(new Date());
+  const effectiveRangeTo = rangeTo < endOfTodayEastern ? rangeTo : endOfTodayEastern;
 
+  const games = await fetchGamesInRange(rangeFrom.toISOString(), effectiveRangeTo.toISOString());
+  const pastGames = games.filter(g => g.startTime && new Date(g.startTime) <= endOfTodayEastern);
+
+  let syncedCount = 0;
+  const gamesWithSeScore = [];
+  for (const g of pastGames) {
+    await pool.query(
+      `INSERT INTO schedule_games_cache (game_id, start_time, division_id, gender, location_name, home_team, home_team_id, away_team, away_team_id, game_status, se_home_score, se_away_score, home_team_logo_url, away_team_logo_url, synced_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now())
+       ON CONFLICT (game_id) DO UPDATE SET
+         start_time = EXCLUDED.start_time, division_id = EXCLUDED.division_id, gender = EXCLUDED.gender,
+         location_name = EXCLUDED.location_name, home_team = EXCLUDED.home_team, home_team_id = EXCLUDED.home_team_id,
+         away_team = EXCLUDED.away_team, away_team_id = EXCLUDED.away_team_id, game_status = EXCLUDED.game_status,
+         se_home_score = EXCLUDED.se_home_score, se_away_score = EXCLUDED.se_away_score,
+         home_team_logo_url = EXCLUDED.home_team_logo_url, away_team_logo_url = EXCLUDED.away_team_logo_url,
+         synced_at = now()`,
+      [g.eventId, g.startTime, g.divisionId, g.gender, g.locationName, g.homeTeam, g.homeTeamId, g.awayTeam, g.awayTeamId, g.gameStatus, g.seHomeScore, g.seAwayScore, g.homeTeamLogoUrl, g.awayTeamLogoUrl]
+    );
+    syncedCount++;
+    // SportsEngine itself has a score filled in - a strong signal a report
+    // was received through some other channel (someone entered it directly
+    // into SportsEngine, bypassing matchday).
+    if (g.seHomeScore != null && g.seHomeScore !== '' && g.seAwayScore != null && g.seAwayScore !== '') {
+      gamesWithSeScore.push(g.eventId);
+    }
+  }
+
+  // Auto-flag "MO report received" for games with an SE score, but only if
+  // our OWN system doesn't already have a real report for it - a real
+  // report always takes priority and displays as it does now, per the
+  // explicit requirement.
+  let autoFlaggedCount = 0;
+  if (gamesWithSeScore.length > 0) {
+    const existingReportsResult = await pool.query(
+      'SELECT game_id FROM match_report_scores WHERE game_id = ANY($1)',
+      [gamesWithSeScore]
+    );
+    const alreadyHasRealReport = new Set(existingReportsResult.rows.map(r => r.game_id));
+    const toAutoFlag = gamesWithSeScore.filter(id => !alreadyHasRealReport.has(id));
+    for (const gameId of toAutoFlag) {
+      const result = await pool.query(
+        `INSERT INTO external_report_flags (game_id, flagged_by)
+         VALUES ($1, $2)
+         ON CONFLICT (game_id) DO NOTHING`,
+        [gameId, 'auto-detected (SE score present)']
+      );
+      if (result.rowCount > 0) autoFlaggedCount++;
+    }
+  }
+
+  return { syncedCount, autoFlaggedCount, rangeFrom: rangeFrom.toISOString(), rangeTo: effectiveRangeTo.toISOString() };
+}
+
+// The automatic background sync moved here from the standalone match-ribbon
+// app (see header comment) - runs on a timer, off any request path, pulling
+// RIBBON_SYNC_DAYS_BACK + 1 days of buffer through the end of today
+// (Eastern), same window shape the ribbon app used to sync for itself.
+async function runAutomaticScheduleSync() {
+  const startedAt = Date.now();
+  try {
+    const now = new Date();
+    const endOfTodayEastern = getEndOfTodayEastern(now);
+    const rangeFrom = new Date(now.getTime() - (RIBBON_SYNC_DAYS_BACK + 1) * 24 * 60 * 60 * 1000);
+    const result = await runScheduleSyncForRange(rangeFrom, endOfTodayEastern);
+    console.log(`[schedule-sync] Automatic sync: ${result.syncedCount} games synced, ${result.autoFlaggedCount} auto-flagged, in ${Date.now() - startedAt}ms.`);
+  } catch (err) {
+    // Never let a failed automatic sync crash the server or block the next
+    // scheduled attempt - the ribbon app just serves whatever's already
+    // cached until the next run succeeds.
+    console.error('[schedule-sync] Automatic sync error (will retry on next scheduled run):', err.message);
+  }
+}
 
 const HTML_FILE = path.join(__dirname, 'index.html');
 
@@ -701,108 +826,6 @@ const server = http.createServer(async (req, res) => {
   // still appears, with score/YC/RC/incident_report left blank - this is
   // deliberately the ONE view for this page now, not a separate toggle
   // (see conversation).
-  // POST /api/match-reports/sync-schedule — fetches PAST games directly
-  // from SportsEngine (this app's own credentials, decoupled from the
-  // schedule monitor entirely) and upserts them into our local cache, so
-  // the main list below can read from our own database instead of a live
-  // fetch on every load. Only runs when this button is explicitly
-  // clicked - never automatically, and never as a side effect of the
-  // schedule monitor's own separate polling.
-  if (req.method === 'POST' && url.pathname === '/api/match-reports/sync-schedule') {
-    const session = await getSession(cookies.admin_session);
-    if (!session) {
-      res.writeHead(401, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ error: 'Not logged in' }));
-    }
-    let body = '';
-    req.on('data', (chunk) => (body += chunk));
-    req.on('end', async () => {
-      let payload = {};
-      try {
-        if (body) payload = JSON.parse(body);
-      } catch (e) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ error: 'Invalid JSON body' }));
-      }
-      try {
-        const now = new Date();
-        // End of TODAY in Eastern time (not just "right now") - so a game
-        // scheduled for later today still gets synced, while games on
-        // future days remain excluded.
-        const endOfTodayEastern = getEndOfTodayEastern(now);
-
-        // Default: last 4 days, as specifically requested - a deliberate,
-        // manually-triggered sync, not a wide historical backfill.
-        const defaultFrom = new Date(now.getTime() - 4 * 24 * 60 * 60 * 1000);
-        const rangeFrom = payload.dateFrom ? getEasternDayBounds(payload.dateFrom).start : defaultFrom;
-        const rangeToRaw = payload.dateTo ? getEasternDayBounds(payload.dateTo).end : now;
-        const rangeTo = rangeToRaw < endOfTodayEastern ? rangeToRaw : endOfTodayEastern; // never sync PAST today (Eastern), but allow all of today
-
-        const games = await fetchGamesInRange(rangeFrom.toISOString(), rangeTo.toISOString());
-
-        // Only games through the end of TODAY (Eastern) get cached, even if
-        // the requested range somehow included later dates - this cache is
-        // specifically for history, but "today" counts as history even if
-        // a specific game later today hasn't kicked off yet.
-        const pastGames = games.filter(g => g.startTime && new Date(g.startTime) <= endOfTodayEastern);
-
-        let syncedCount = 0;
-        const gamesWithSeScore = [];
-        for (const g of pastGames) {
-          await pool.query(
-            `INSERT INTO schedule_games_cache (game_id, start_time, division_id, gender, location_name, home_team, home_team_id, away_team, away_team_id, game_status, se_home_score, se_away_score, synced_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
-             ON CONFLICT (game_id) DO UPDATE SET
-               start_time = EXCLUDED.start_time, division_id = EXCLUDED.division_id, gender = EXCLUDED.gender,
-               location_name = EXCLUDED.location_name, home_team = EXCLUDED.home_team, home_team_id = EXCLUDED.home_team_id,
-               away_team = EXCLUDED.away_team, away_team_id = EXCLUDED.away_team_id, game_status = EXCLUDED.game_status,
-               se_home_score = EXCLUDED.se_home_score, se_away_score = EXCLUDED.se_away_score,
-               synced_at = now()`,
-            [g.eventId, g.startTime, g.divisionId, g.gender, g.locationName, g.homeTeam, g.homeTeamId, g.awayTeam, g.awayTeamId, g.gameStatus, g.seHomeScore, g.seAwayScore]
-          );
-          syncedCount++;
-          // SportsEngine itself has a score filled in - a strong signal a
-          // report was received through some other channel (someone
-          // entered it directly into SportsEngine, bypassing matchday).
-          if (g.seHomeScore != null && g.seHomeScore !== '' && g.seAwayScore != null && g.seAwayScore !== '') {
-            gamesWithSeScore.push(g.eventId);
-          }
-        }
-
-        // Auto-flag "MO report received" for games with an SE score, but
-        // only if our OWN system doesn't already have a real report for
-        // it - a real report always takes priority and displays as it
-        // does now, per the explicit requirement.
-        let autoFlaggedCount = 0;
-        if (gamesWithSeScore.length > 0) {
-          const existingReportsResult = await pool.query(
-            'SELECT game_id FROM match_report_scores WHERE game_id = ANY($1)',
-            [gamesWithSeScore]
-          );
-          const alreadyHasRealReport = new Set(existingReportsResult.rows.map(r => r.game_id));
-          const toAutoFlag = gamesWithSeScore.filter(id => !alreadyHasRealReport.has(id));
-          for (const gameId of toAutoFlag) {
-            const result = await pool.query(
-              `INSERT INTO external_report_flags (game_id, flagged_by)
-               VALUES ($1, $2)
-               ON CONFLICT (game_id) DO NOTHING`,
-              [gameId, 'auto-detected (SE score present)']
-            );
-            if (result.rowCount > 0) autoFlaggedCount++;
-          }
-        }
-
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, syncedCount, autoFlaggedCount, rangeFrom: rangeFrom.toISOString(), rangeTo: rangeTo.toISOString() }));
-      } catch (err) {
-        console.error('[api/match-reports sync-schedule] Error:', err.message);
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: err.message }));
-      }
-    });
-    return;
-  }
-
   if (req.method === 'GET' && url.pathname === '/api/match-reports') {
     const session = await getSession(cookies.admin_session);
     if (!session) {
@@ -893,9 +916,8 @@ const server = http.createServer(async (req, res) => {
       let mergedRows;
 
       // Read from our own local cache instead of live-fetching the
-      // schedule monitor on every load - the cache is only ever populated
-      // by the explicit "Sync Historical Games" button (see sync-schedule
-      // endpoint above), never automatically here.
+      // schedule monitor on every load - the cache is kept fresh by the
+      // automatic background sync (see runAutomaticScheduleSync above).
       const cacheResult = await pool.query(
         'SELECT * FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2',
         [rangeFrom.toISOString(), rangeTo.toISOString()]
@@ -1552,4 +1574,13 @@ server.listen(PORT, async () => {
       console.error('[postgres] Connection test FAILED:', err.message);
     }
   }
+  if (!SE_CLIENT_ID || !SE_CLIENT_SECRET || !SE_DATA_REFRESH_TOKEN || !SE_ORG_ID) {
+    console.warn('WARNING: one or more SportsEngine env vars are missing (SE_CLIENT_ID, SE_CLIENT_SECRET, SE_DATA_REFRESH_TOKEN, SE_ORG_ID) - the automatic background sync will fail until they are set.');
+  }
+  // Ensure the team-logo columns exist, then kick off the automatic
+  // background sync (moved here from the match-ribbon app) once immediately
+  // so there's fresh data right away, then on the configured interval.
+  await ensureLogoColumns();
+  runAutomaticScheduleSync();
+  setInterval(runAutomaticScheduleSync, RIBBON_SYNC_INTERVAL_MINUTES * 60 * 1000);
 });
