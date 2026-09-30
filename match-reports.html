@@ -409,10 +409,17 @@
   // Mobile card's score line: once a real report exists, the "-" between
   // the two numbers becomes the Box Score trigger itself, rather than a
   // separate button underneath - "3 [Box Score] 1" in place of "3 - 1".
-  // Forfeits and SE/MO-only scores keep the plain dash (no events to show).
+  // A SportsEngine/MO score with no real USCCS report yet gets the same
+  // yellow highlight + "(from SE/MO)" note the desktop table shows in its
+  // Score column - this was previously missing here, so that state showed
+  // as a plain, unhighlighted score on mobile. Forfeits keep the plain
+  // reason text (no score, nothing to highlight).
   function mobileScoreLineHtml(r) {
     if (r.has_report && !r.is_forfeit) {
       return `${escapeHtml(String(r.team1_score))} <a href="#" onclick="openBoxScore('${escapeJs(r.game_id)}'); return false;" style="color:var(--navy); text-decoration:underline;">Box Score</a> ${escapeHtml(String(r.team2_score))}`;
+    }
+    if (!r.is_forfeit && !r.has_report && r.se_home_score != null && r.se_away_score != null) {
+      return `<span style="background:#FFF6D6; padding:2px 6px; border-radius:4px;">${escapeHtml(scoreText(r))}</span><div class="muted" style="font-weight:400; font-size:10px; margin-top:2px;">(from SE/MO)</div>`;
     }
     return escapeHtml(scoreText(r));
   }
