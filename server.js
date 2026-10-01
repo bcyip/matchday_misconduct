@@ -187,6 +187,25 @@ async function ensureLogoColumns() {
   }
 }
 
+// Backing table for the standalone "SE manual score entry" flag - tracks,
+// independently of "MO report reviewed", that someone typed a score directly
+// into SportsEngine rather than it coming in through a USCCS match report.
+// Same shape as external_report_flags (see schema_external_flags.sql) since
+// both are simple admin-set-admin-unset per-game flags.
+async function ensureSeManualEntryTable() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS se_manual_entry_flags (
+        game_id TEXT PRIMARY KEY,
+        flagged_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        flagged_by TEXT
+      )
+    `);
+  } catch (err) {
+    console.error('[schedule-sync] Could not ensure se_manual_entry_flags table exists:', err.message);
+  }
+}
+
 // ---------- Cookie helpers (manual - no new dependency) ----------
 
 function parseCookies(req) {
@@ -570,11 +589,19 @@ async function fetchGamesInRange(from, to) {
 }
 
 // Called by the automatic background timer (see runAutomaticScheduleSync /
-// server.listen) - fetches the given range from SportsEngine, upserts into
-// schedule_games_cache (including the team logo columns), and auto-flags
-// "MO report received" for any game where SportsEngine already has a score.
+// server.listen) - fetches the given range from SportsEngine and upserts into
+// schedule_games_cache (including the team logo columns).
 // Never syncs past the end of today (Eastern), regardless of what range is
 // passed in - this cache is for history that's already happened.
+//
+// NOTE: this used to also auto-flag "MO report received" whenever
+// SportsEngine already had a score for a game with no real USCCS report yet.
+// That auto-flagging was removed per explicit request: "MO report reviewed"
+// (renamed from "MO report received") is now a purely manual, admin-entered
+// flag, decoupled from whether SportsEngine has a score. Whether a score was
+// typed directly into SportsEngine is now tracked separately via the
+// standalone "SE manual score entry" flag, which is also set manually by an
+// admin (see the flag-se-manual-entry endpoint below).
 async function runScheduleSyncForRange(rangeFrom, rangeTo) {
   const endOfTodayEastern = getEndOfTodayEastern(new Date());
   const effectiveRangeTo = rangeTo < endOfTodayEastern ? rangeTo : endOfTodayEastern;
@@ -583,7 +610,6 @@ async function runScheduleSyncForRange(rangeFrom, rangeTo) {
   const pastGames = games.filter(g => g.startTime && new Date(g.startTime) <= endOfTodayEastern);
 
   let syncedCount = 0;
-  const gamesWithSeScore = [];
   for (const g of pastGames) {
     await pool.query(
       `INSERT INTO schedule_games_cache (game_id, start_time, division_id, gender, location_name, home_team, home_team_id, away_team, away_team_id, game_status, se_home_score, se_away_score, home_team_logo_url, away_team_logo_url, synced_at)
@@ -598,38 +624,9 @@ async function runScheduleSyncForRange(rangeFrom, rangeTo) {
       [g.eventId, g.startTime, g.divisionId, g.gender, g.locationName, g.homeTeam, g.homeTeamId, g.awayTeam, g.awayTeamId, g.gameStatus, g.seHomeScore, g.seAwayScore, g.homeTeamLogoUrl, g.awayTeamLogoUrl]
     );
     syncedCount++;
-    // SportsEngine itself has a score filled in - a strong signal a report
-    // was received through some other channel (someone entered it directly
-    // into SportsEngine, bypassing matchday).
-    if (g.seHomeScore != null && g.seHomeScore !== '' && g.seAwayScore != null && g.seAwayScore !== '') {
-      gamesWithSeScore.push(g.eventId);
-    }
   }
 
-  // Auto-flag "MO report received" for games with an SE score, but only if
-  // our OWN system doesn't already have a real report for it - a real
-  // report always takes priority and displays as it does now, per the
-  // explicit requirement.
-  let autoFlaggedCount = 0;
-  if (gamesWithSeScore.length > 0) {
-    const existingReportsResult = await pool.query(
-      'SELECT game_id FROM match_report_scores WHERE game_id = ANY($1)',
-      [gamesWithSeScore]
-    );
-    const alreadyHasRealReport = new Set(existingReportsResult.rows.map(r => r.game_id));
-    const toAutoFlag = gamesWithSeScore.filter(id => !alreadyHasRealReport.has(id));
-    for (const gameId of toAutoFlag) {
-      const result = await pool.query(
-        `INSERT INTO external_report_flags (game_id, flagged_by)
-         VALUES ($1, $2)
-         ON CONFLICT (game_id) DO NOTHING`,
-        [gameId, 'auto-detected (SE score present)']
-      );
-      if (result.rowCount > 0) autoFlaggedCount++;
-    }
-  }
-
-  return { syncedCount, autoFlaggedCount, rangeFrom: rangeFrom.toISOString(), rangeTo: effectiveRangeTo.toISOString() };
+  return { syncedCount, rangeFrom: rangeFrom.toISOString(), rangeTo: effectiveRangeTo.toISOString() };
 }
 
 // The automatic background sync moved here from the standalone match-ribbon
@@ -643,7 +640,7 @@ async function runAutomaticScheduleSync() {
     const endOfTodayEastern = getEndOfTodayEastern(now);
     const rangeFrom = new Date(now.getTime() - (RIBBON_SYNC_DAYS_BACK + 1) * 24 * 60 * 60 * 1000);
     const result = await runScheduleSyncForRange(rangeFrom, endOfTodayEastern);
-    console.log(`[schedule-sync] Automatic sync: ${result.syncedCount} games synced, ${result.autoFlaggedCount} auto-flagged, in ${Date.now() - startedAt}ms.`);
+    console.log(`[schedule-sync] Automatic sync: ${result.syncedCount} games synced, in ${Date.now() - startedAt}ms.`);
   } catch (err) {
     // Never let a failed automatic sync crash the server or block the next
     // scheduled attempt - the ribbon app just serves whatever's already
@@ -893,8 +890,9 @@ const server = http.createServer(async (req, res) => {
       // report, so scoped to just those game_ids rather than the whole
       // visible range.
       const reportedGameIds = [...reportByGameId.keys()];
-      const [flaggedResult, forfeitResult, entriesResult] = await Promise.all([
+      const [flaggedResult, seManualEntryResult, forfeitResult, entriesResult] = await Promise.all([
         pool.query('SELECT game_id FROM external_report_flags'),
+        pool.query('SELECT game_id FROM se_manual_entry_flags'),
         pool.query('SELECT game_id, reason, referee_paid, charge_status FROM forfeit_flags'),
         reportedGameIds.length > 0
           ? pool.query(
@@ -907,6 +905,7 @@ const server = http.createServer(async (req, res) => {
       ]);
       const forfeitInfoByGameId = new Map(forfeitResult.rows.map(r => [r.game_id, { reason: r.reason, referee_paid: r.referee_paid, charge_status: r.charge_status }]));
       const flaggedIds = new Set(flaggedResult.rows.map(r => r.game_id));
+      const seManualEntryIds = new Set(seManualEntryResult.rows.map(r => r.game_id));
       const entriesByGameId = new Map();
       for (const e of entriesResult.rows) {
         if (!entriesByGameId.has(e.game_id)) entriesByGameId.set(e.game_id, []);
@@ -997,7 +996,14 @@ const server = http.createServer(async (req, res) => {
         return {
           ...r,
           division_name: r.division_id ? ((DIVISION_LOOKUP[r.division_id] && DIVISION_LOOKUP[r.division_id].name) || r.division_id) : null,
+          // "MO report reviewed" (renamed from "MO report received") - a
+          // purely manual, admin-entered flag. Never auto-set from a
+          // SportsEngine score (see runScheduleSyncForRange).
           flagged_external: flaggedIds.has(r.game_id),
+          // "SE manual score entry" - a standalone, independently-manual
+          // flag tracking that a score was typed directly into SportsEngine,
+          // decoupled from whether the MO report itself has been reviewed.
+          se_manual_entry: seManualEntryIds.has(r.game_id),
           is_forfeit: isForfeit,
           forfeit_reason: forfeitReason, // 'forfeit' | 'postponed' | 'rainout' | null
           referee_paid: forfeitInfo ? forfeitInfo.referee_paid : null, // true | false | null (undecided)
@@ -1067,6 +1073,50 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ success: true }));
       } catch (err) {
         console.error('[api/match-reports flag-external] Error:', err.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // POST /api/match-reports/:gameId/flag-se-manual-entry — toggle whether a
+  // score was typed directly into SportsEngine (bypassing matchday), tracked
+  // as its own standalone flag, independent of "MO report reviewed". Body:
+  // { flagged: true|false }.
+  const flagSeManualEntryMatch = url.pathname.match(/^\/api\/match-reports\/([^/]+)\/flag-se-manual-entry$/);
+  if (req.method === 'POST' && flagSeManualEntryMatch) {
+    const session = await getSession(cookies.admin_session);
+    if (!session) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Not logged in' }));
+    }
+    const gameId = decodeURIComponent(flagSeManualEntryMatch[1]);
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', async () => {
+      let payload;
+      try {
+        payload = JSON.parse(body);
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'Invalid JSON body' }));
+      }
+      try {
+        if (payload.flagged) {
+          await pool.query(
+            `INSERT INTO se_manual_entry_flags (game_id, flagged_by)
+             VALUES ($1, $2)
+             ON CONFLICT (game_id) DO NOTHING`,
+            [gameId, session.name || null]
+          );
+        } else {
+          await pool.query('DELETE FROM se_manual_entry_flags WHERE game_id = $1', [gameId]);
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      } catch (err) {
+        console.error('[api/match-reports flag-se-manual-entry] Error:', err.message);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: err.message }));
       }
@@ -1581,6 +1631,7 @@ server.listen(PORT, async () => {
   // background sync (moved here from the match-ribbon app) once immediately
   // so there's fresh data right away, then on the configured interval.
   await ensureLogoColumns();
+  await ensureSeManualEntryTable();
   runAutomaticScheduleSync();
   setInterval(runAutomaticScheduleSync, RIBBON_SYNC_INTERVAL_MINUTES * 60 * 1000);
 });

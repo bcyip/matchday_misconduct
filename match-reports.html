@@ -109,7 +109,7 @@
         <select id="reportStatusFilter" onchange="applyReportFilterAndRender()">
           <option value="all">All Games</option>
           <option value="has_report">USCCS Report</option>
-          <option value="mo_report_only">MO Report</option>
+          <option value="mo_report_only">MO Report Reviewed</option>
           <option value="no_report_registered">No USCCS Report</option>
         </select>
       </div>
@@ -247,12 +247,12 @@
     const status = document.getElementById('reportStatusFilter').value;
     let filtered = lastLoadedReports;
     if (status === 'has_report') filtered = lastLoadedReports.filter(r => r.has_report);
-    // A game only ever gets auto-flagged (or stays flagged) as "MO report
-    // received" while our own system has no real report for it - see the
-    // runScheduleSyncForRange comment server-side - so this is never true
-    // at the same time as has_report in normal operation, but the has_report
-    // check is kept anyway as a safety net in case a report is later
-    // submitted for an already-flagged game without the flag being cleared.
+    // "MO report reviewed" is a purely manual, admin-entered flag - never
+    // auto-set from a SportsEngine score (see runScheduleSyncForRange
+    // server-side). It's independent of has_report, so in principle both
+    // could be true at once; the has_report check here is kept as a safety
+    // net so a flagged game that later gets a real report submitted moves
+    // out of this filter rather than double-counting.
     else if (status === 'mo_report_only') filtered = lastLoadedReports.filter(r => r.flagged_external && !r.has_report);
     else if (status === 'no_report_registered') filtered = lastLoadedReports.filter(r => !r.has_report && !r.flagged_external);
     renderSummaryStats();
@@ -273,7 +273,7 @@
     document.getElementById('summaryStats').innerHTML = `
       <strong>${totalGames}</strong> total games &nbsp;·&nbsp;
       <strong>${usccsReport}</strong> USCCS report &nbsp;·&nbsp;
-      <strong>${moReport}</strong> MO report &nbsp;·&nbsp;
+      <strong>${moReport}</strong> MO report reviewed &nbsp;·&nbsp;
       <strong>${noReport}</strong> no USCCS report
     `;
   }
@@ -446,7 +446,12 @@
           <span class="muted">|</span>
           <label style="display:flex; align-items:center; gap:4px; font-weight:400; cursor:pointer;">
             <input type="checkbox" ${r.flagged_external ? 'checked' : ''} onchange="toggleExternalFlag('${escapeJs(r.game_id)}', this.checked)" />
-            MO report
+            MO report reviewed
+          </label>
+          <span class="muted">|</span>
+          <label style="display:flex; align-items:center; gap:4px; font-weight:400; cursor:pointer;">
+            <input type="checkbox" ${r.se_manual_entry ? 'checked' : ''} onchange="toggleSeManualEntryFlag('${escapeJs(r.game_id)}', this.checked)" />
+            SE manual score entry
           </label>
           <span class="muted">|</span>
           <select onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.value)" style="font-size:11px; padding:2px 4px; border:1px solid var(--border); border-radius:5px;">
@@ -462,7 +467,11 @@
       <span class="muted" style="font-size:12px; display:block;">No USCCS Report</span>
       <label style="display:flex; align-items:center; gap:5px; font-size:11.5px; font-weight:400; margin-top:4px; cursor:pointer;">
         <input type="checkbox" ${r.flagged_external ? 'checked' : ''} onchange="toggleExternalFlag('${escapeJs(r.game_id)}', this.checked)" />
-        MO report received
+        MO report reviewed
+      </label>
+      <label style="display:flex; align-items:center; gap:5px; font-size:11.5px; font-weight:400; margin-top:4px; cursor:pointer;">
+        <input type="checkbox" ${r.se_manual_entry ? 'checked' : ''} onchange="toggleSeManualEntryFlag('${escapeJs(r.game_id)}', this.checked)" />
+        SE manual score entry
       </label>
       <select onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.value)" style="font-size:11.5px; padding:3px 5px; margin-top:4px; border:1px solid var(--border); border-radius:5px;">
         <option value="" selected>Forfeit/Postponed/Rainout?</option>
@@ -629,6 +638,21 @@
       });
       if (!res.ok) throw new Error('Failed to save');
       loadReports(); // reload so the row's highlight color updates too
+    } catch (e) {
+      alert('Failed to update: ' + e.message);
+      loadReports(); // reload to reflect the actual (unchanged) state
+    }
+  }
+
+  async function toggleSeManualEntryFlag(gameId, flagged) {
+    try {
+      const res = await fetch('/api/match-reports/' + encodeURIComponent(gameId) + '/flag-se-manual-entry', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ flagged }),
+      });
+      if (!res.ok) throw new Error('Failed to save');
+      loadReports();
     } catch (e) {
       alert('Failed to update: ' + e.message);
       loadReports(); // reload to reflect the actual (unchanged) state
