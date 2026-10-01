@@ -313,11 +313,16 @@
   }
 
   // Same highlight color rule shared by the table row and the mobile
-  // card: gray for forfeit/postponed/rainout, yellow for MO-flagged with
-  // no report of our own yet, red for no report and no flag at all.
+  // card: gray for forfeit/postponed/rainout, yellow for the whole row
+  // whenever "MO report reviewed" is checked (this is a manual admin call,
+  // independent of has_report, so it wins even if a real report also
+  // exists), otherwise red if there's no report at all yet.
+  // "SE manual score entry" does NOT affect the row - it only highlights
+  // the score cell itself (see scoreCellHtml / mobileScoreLineHtml).
   function rowBgColor(r) {
     if (r.is_forfeit) return '#F4F6FA';
-    if (!r.has_report) return r.flagged_external ? '#FDF0DD' : '#FBEAE8';
+    if (r.flagged_external) return '#FDF0DD';
+    if (!r.has_report) return '#FBEAE8';
     return null;
   }
 
@@ -332,6 +337,26 @@
     if (r.has_report) return r.team1_score + ' - ' + r.team2_score;
     if (r.se_home_score != null && r.se_away_score != null) return r.se_home_score + ' - ' + r.se_away_score;
     return '—';
+  }
+
+  // Desktop table's Score cell. Two independent reasons a score gets a
+  // yellow highlight, both ONLY while there's no real USCCS report yet -
+  // once a real report is entered, that score is the truth and shows
+  // plain/white regardless of either flag: (1) it's SportsEngine/MO's own
+  // score standing in because no real report exists - labeled "(from
+  // SE/MO)", or (2) "SE manual score entry" is checked - someone typed
+  // this score directly into SportsEngine. Only the score itself is
+  // highlighted here, never the row.
+  function scoreCellHtml(r) {
+    const text = escapeHtml(scoreText(r));
+    if (r.is_forfeit || r.has_report) return text;
+    if (r.se_home_score != null && r.se_away_score != null) {
+      return `<span style="background:#FFF6D6; padding:2px 6px; border-radius:4px;">${text}</span><div class="muted" style="font-weight:400; font-size:10px; margin-top:2px;">(from SE/MO)</div>`;
+    }
+    if (r.se_manual_entry) {
+      return `<span style="background:#FFF6D6; padding:2px 6px; border-radius:4px;">${text}</span>`;
+    }
+    return text;
   }
 
   // A Box Score button below the score, opening the events modal - only
@@ -362,18 +387,22 @@
 
   // Mobile card's score line: once a real report exists, the "-" between
   // the two numbers becomes the Box Score trigger itself, rather than a
-  // separate button underneath - "3 [Box Score] 1" in place of "3 - 1".
-  // A SportsEngine/MO score with no real USCCS report yet gets the same
-  // yellow highlight + "(from SE/MO)" note the desktop table shows in its
-  // Score column - this was previously missing here, so that state showed
-  // as a plain, unhighlighted score on mobile. Forfeits keep the plain
-  // reason text (no score, nothing to highlight).
+  // separate button underneath - "3 [Box Score] 1" in place of "3 - 1" -
+  // and it's shown plain/white, same as the desktop table, regardless of
+  // either flag. Only while there's no real report yet does a score get a
+  // yellow highlight: either SportsEngine/MO's own score standing in (+ the
+  // "(from SE/MO)" note), or "SE manual score entry" being checked.
+  // Forfeits keep the plain reason text (no score, nothing to highlight).
   function mobileScoreLineHtml(r) {
     if (r.has_report && !r.is_forfeit) {
+      // A real report is the truth - plain/white regardless of either flag.
       return `${escapeHtml(String(r.team1_score))} <a href="#" onclick="openBoxScore('${escapeJs(r.game_id)}'); return false;" style="color:var(--navy); text-decoration:underline;">Box Score</a> ${escapeHtml(String(r.team2_score))}`;
     }
     if (!r.is_forfeit && !r.has_report && r.se_home_score != null && r.se_away_score != null) {
       return `<span style="background:#FFF6D6; padding:2px 6px; border-radius:4px;">${escapeHtml(scoreText(r))}</span><div class="muted" style="font-weight:400; font-size:10px; margin-top:2px;">(from SE/MO)</div>`;
+    }
+    if (r.se_manual_entry) {
+      return `<span style="background:#FFF6D6; padding:2px 6px; border-radius:4px;">${escapeHtml(scoreText(r))}</span>`;
     }
     return escapeHtml(scoreText(r));
   }
@@ -511,12 +540,7 @@
               <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team1_yellow_count, 'yc-count')}</td>
               <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team1_red_count, 'rc-count')}</td>
               <td style="text-align:center; font-weight:700; white-space:nowrap;">
-                ${r.is_forfeit ? escapeHtml(scoreText(r))
-                  : r.has_report ? escapeHtml(scoreText(r))
-                  : (r.se_home_score != null && r.se_away_score != null)
-                    ? `<span style="background:#FFF6D6; padding:2px 6px; border-radius:4px;">${escapeHtml(scoreText(r))}</span><div class="muted" style="font-weight:400; font-size:10px; margin-top:2px;">(from SE/MO)</div>`
-                    : escapeHtml(scoreText(r))
-                }
+                ${scoreCellHtml(r)}
                 <div>${boxScoreButtonHtml(r)}</div>
               </td>
               <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team2_red_count, 'rc-count')}</td>
