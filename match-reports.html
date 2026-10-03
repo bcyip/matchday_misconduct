@@ -312,18 +312,22 @@
     return `<span class="card-count ${colorClass}">${count}</span>`;
   }
 
-  // Same highlight color rule shared by the table row and the mobile
-  // card: gray for forfeit/postponed/rainout, yellow for the whole row
-  // whenever "MO report reviewed" is checked (this is a manual admin call,
-  // independent of has_report, so it wins even if a real report also
-  // exists), otherwise red if there's no report at all yet.
-  // "SE manual score entry" does NOT affect the row - it only highlights
-  // the score cell itself (see scoreCellHtml / mobileScoreLineHtml).
+  // Same highlight color rule shared by the table row and the mobile card,
+  // checked top-down - the first match wins:
+  //   1. A real USCCS report in our own db always wins - white, no matter
+  //      what any flag says.
+  //   2. Otherwise, "MO report reviewed" manually checked - yellow, whole
+  //      row.
+  //   3. Otherwise, a score pulled from the SportsEngine sync (or "SE
+  //      manual score entry" checked) - red row, but just the score cell
+  //      itself highlighted yellow (see scoreCellHtml / mobileScoreLineHtml).
+  //   4. Otherwise (no score, no report, no flag) - red, nothing else
+  //      highlighted.
   function rowBgColor(r) {
     if (r.is_forfeit) return '#F4F6FA';
+    if (r.has_report) return null;
     if (r.flagged_external) return '#FDF0DD';
-    if (!r.has_report) return '#FBEAE8';
-    return null;
+    return '#FBEAE8';
   }
 
   function reasonLabelFor(r) {
@@ -339,17 +343,15 @@
     return '—';
   }
 
-  // Desktop table's Score cell. Two independent reasons a score gets a
-  // yellow highlight, both ONLY while there's no real USCCS report yet -
-  // once a real report is entered, that score is the truth and shows
-  // plain/white regardless of either flag: (1) it's SportsEngine/MO's own
-  // score standing in because no real report exists - labeled "(from
-  // SE/MO)", or (2) "SE manual score entry" is checked - someone typed
-  // this score directly into SportsEngine. Only the score itself is
-  // highlighted here, never the row.
+  // Desktop table's Score cell - same top-down priority as rowBgColor:
+  // 1. A real report, or 2. "MO report reviewed" checked - plain text (the
+  //    row itself is already white or yellow; nothing extra on the score).
+  // 3. A SportsEngine/MO score (from the sync) or "SE manual score entry"
+  //    checked - just the score gets a yellow highlight, row stays red.
+  // 4. Otherwise plain (row is already red).
   function scoreCellHtml(r) {
     const text = escapeHtml(scoreText(r));
-    if (r.is_forfeit || r.has_report) return text;
+    if (r.is_forfeit || r.has_report || r.flagged_external) return text;
     if (r.se_home_score != null && r.se_away_score != null) {
       return `<span style="background:#FFF6D6; padding:2px 6px; border-radius:4px;">${text}</span><div class="muted" style="font-weight:400; font-size:10px; margin-top:2px;">(from SE/MO)</div>`;
     }
@@ -385,20 +387,21 @@
     `;
   }
 
-  // Mobile card's score line: once a real report exists, the "-" between
-  // the two numbers becomes the Box Score trigger itself, rather than a
-  // separate button underneath - "3 [Box Score] 1" in place of "3 - 1" -
-  // and it's shown plain/white, same as the desktop table, regardless of
-  // either flag. Only while there's no real report yet does a score get a
-  // yellow highlight: either SportsEngine/MO's own score standing in (+ the
-  // "(from SE/MO)" note), or "SE manual score entry" being checked.
-  // Forfeits keep the plain reason text (no score, nothing to highlight).
+  // Mobile card's score line - same top-down priority as rowBgColor:
+  // 1. A real report - the "-" becomes the Box Score trigger itself,
+  //    "3 [Box Score] 1" in place of "3 - 1" - plain/white, no highlight.
+  // 2. "MO report reviewed" checked - plain (the card is already yellow).
+  // 3. A SportsEngine/MO score (from the sync) or "SE manual score entry"
+  //    checked - just this score line highlighted yellow, card stays red.
+  // 4. Otherwise plain (the card is already red, nothing more to show).
+  // Forfeits keep the plain reason text throughout (no score at all).
   function mobileScoreLineHtml(r) {
     if (r.has_report && !r.is_forfeit) {
       // A real report is the truth - plain/white regardless of either flag.
       return `${escapeHtml(String(r.team1_score))} <a href="#" onclick="openBoxScore('${escapeJs(r.game_id)}'); return false;" style="color:var(--navy); text-decoration:underline;">Box Score</a> ${escapeHtml(String(r.team2_score))}`;
     }
-    if (!r.is_forfeit && !r.has_report && r.se_home_score != null && r.se_away_score != null) {
+    if (r.is_forfeit || r.flagged_external) return escapeHtml(scoreText(r));
+    if (r.se_home_score != null && r.se_away_score != null) {
       return `<span style="background:#FFF6D6; padding:2px 6px; border-radius:4px;">${escapeHtml(scoreText(r))}</span><div class="muted" style="font-weight:400; font-size:10px; margin-top:2px;">(from SE/MO)</div>`;
     }
     if (r.se_manual_entry) {
