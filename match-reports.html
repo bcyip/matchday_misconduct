@@ -369,10 +369,10 @@
     return `<button class="push-score-btn" style="margin-top:6px;" onclick="openBoxScore('${escapeJs(r.game_id)}')">Box Score</button>`;
   }
 
-  // Who gets charged for a forfeit/postponed/rainout game - independent of
+  // Who gets charged for a forfeit/postponed/abandoned game - independent of
   // both the reason itself and the referee-paid decision (see
   // set-charge-status), so it gets its own select same as those. Blank for
-  // any game that isn't flagged forfeit/postponed/rainout - nothing to
+  // any game that isn't flagged forfeit/postponed/abandoned - nothing to
   // charge for a game that was actually played or hasn't happened yet.
   function chargeStatusHtml(r) {
     if (!r.is_forfeit) return '';
@@ -422,7 +422,7 @@
             <select onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.value)" style="font-size:11px; padding:2px 4px; border:1px solid var(--border); border-radius:5px;">
               <option value="forfeit" ${r.forfeit_reason === 'forfeit' ? 'selected' : ''}>Forfeit</option>
               <option value="postponed" ${r.forfeit_reason === 'postponed' ? 'selected' : ''}>Postponed</option>
-              <option value="rainout" ${r.forfeit_reason === 'rainout' ? 'selected' : ''}>Rainout</option>
+              <option value="abandoned" ${r.forfeit_reason === 'abandoned' ? 'selected' : ''}>Abandoned</option>
               <option value="">— Clear —</option>
             </select>
             <span class="muted">Pay ref?</span>
@@ -439,13 +439,14 @@
               <option value="no_charge" ${r.charge_status === 'no_charge' ? 'selected' : ''}>No Charge</option>
             </select>
           </div>
+          ${r.forfeit_notes ? `<div class="muted" style="font-size:11px; margin-top:4px; white-space:pre-wrap;">📝 ${escapeHtml(r.forfeit_notes)}</div>` : ''}
         `;
       }
       return `
         <select onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.value)" style="font-size:11.5px; padding:3px 5px; border:1px solid var(--border); border-radius:5px;">
           <option value="forfeit" ${r.forfeit_reason === 'forfeit' ? 'selected' : ''}>Forfeit</option>
           <option value="postponed" ${r.forfeit_reason === 'postponed' ? 'selected' : ''}>Postponed</option>
-          <option value="rainout" ${r.forfeit_reason === 'rainout' ? 'selected' : ''}>Rainout</option>
+          <option value="abandoned" ${r.forfeit_reason === 'abandoned' ? 'selected' : ''}>Abandoned</option>
           <option value="">— Clear —</option>
         </select>
         <div style="margin-top:5px; display:flex; align-items:center; gap:5px; font-size:11.5px;">
@@ -456,6 +457,7 @@
             <option value="false" ${r.referee_paid === false ? 'selected' : ''}>No</option>
           </select>
         </div>
+        ${r.forfeit_notes ? `<div class="muted" style="font-size:11.5px; margin-top:5px; white-space:pre-wrap;">📝 ${escapeHtml(r.forfeit_notes)}</div>` : ''}
       `;
     }
     if (r.has_report) {
@@ -487,10 +489,10 @@
           </label>
           <span class="muted">|</span>
           <select onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.value)" style="font-size:11px; padding:2px 4px; border:1px solid var(--border); border-radius:5px;">
-            <option value="" selected>Forfeit/Postponed/Rainout?</option>
+            <option value="" selected>Forfeit/Postponed/Abandoned?</option>
             <option value="forfeit">Forfeit</option>
             <option value="postponed">Postponed</option>
-            <option value="rainout">Rainout</option>
+            <option value="abandoned">Abandoned</option>
           </select>
         </div>
       `;
@@ -506,10 +508,10 @@
         SE manual score entry
       </label>
       <select onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.value)" style="font-size:11.5px; padding:3px 5px; margin-top:4px; border:1px solid var(--border); border-radius:5px;">
-        <option value="" selected>Forfeit/Postponed/Rainout?</option>
+        <option value="" selected>Forfeit/Postponed/Abandoned?</option>
         <option value="forfeit">Forfeit</option>
         <option value="postponed">Postponed</option>
-        <option value="rainout">Rainout</option>
+        <option value="abandoned">Abandoned</option>
       </select>
     `;
   }

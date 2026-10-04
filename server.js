@@ -893,7 +893,7 @@ const server = http.createServer(async (req, res) => {
       const [flaggedResult, seManualEntryResult, forfeitResult, entriesResult] = await Promise.all([
         pool.query('SELECT game_id FROM external_report_flags'),
         pool.query('SELECT game_id FROM se_manual_entry_flags'),
-        pool.query('SELECT game_id, reason, referee_paid, charge_status FROM forfeit_flags'),
+        pool.query('SELECT game_id, reason, referee_paid, charge_status, notes FROM forfeit_flags'),
         reportedGameIds.length > 0
           ? pool.query(
               `SELECT game_id, team_id, team_name, person_type, name, event_type, minute, reason
@@ -903,7 +903,7 @@ const server = http.createServer(async (req, res) => {
             )
           : Promise.resolve({ rows: [] }),
       ]);
-      const forfeitInfoByGameId = new Map(forfeitResult.rows.map(r => [r.game_id, { reason: r.reason, referee_paid: r.referee_paid, charge_status: r.charge_status }]));
+      const forfeitInfoByGameId = new Map(forfeitResult.rows.map(r => [r.game_id, { reason: r.reason, referee_paid: r.referee_paid, charge_status: r.charge_status, notes: r.notes }]));
       const flaggedIds = new Set(flaggedResult.rows.map(r => r.game_id));
       const seManualEntryIds = new Set(seManualEntryResult.rows.map(r => r.game_id));
       const entriesByGameId = new Map();
@@ -1005,7 +1005,12 @@ const server = http.createServer(async (req, res) => {
           // decoupled from whether the MO report itself has been reviewed.
           se_manual_entry: seManualEntryIds.has(r.game_id),
           is_forfeit: isForfeit,
-          forfeit_reason: forfeitReason, // 'forfeit' | 'postponed' | 'rainout' | null
+          forfeit_reason: forfeitReason, // 'forfeit' | 'postponed' | 'abandoned' | null
+          // Free-text explanation - the only way this ever gets populated
+          // today is a referee marking a game "Abandoned" from the matchday
+          // app (see checkin_server.js's mark-abandoned endpoint); admin
+          // never has its own input for this, just read-only display.
+          forfeit_notes: forfeitInfo ? forfeitInfo.notes : null,
           referee_paid: forfeitInfo ? forfeitInfo.referee_paid : null, // true | false | null (undecided)
           charge_status: forfeitInfo ? forfeitInfo.charge_status : null, // 'teams_charged' | 'usccs_charged' | 'no_charge' | null (undecided)
           // SportsEngine's own score - kept SEPARATE from our own report
@@ -1013,7 +1018,7 @@ const server = http.createServer(async (req, res) => {
           // available for games that have actually been synced.
           se_home_score: (seScoreByGameId.get(r.game_id) || {}).seHomeScore || null,
           se_away_score: (seScoreByGameId.get(r.game_id) || {}).seAwayScore || null,
-          // A forfeit/postponed/rainout counts as "entered" even with no
+          // A forfeit/postponed/abandoned counts as "entered" even with no
           // real score data - there's nothing more to report for it.
           has_report: r.team1_score != null || r.team2_score != null || isForfeit,
           // Goals/cards for the box score modal - empty for games with no
@@ -1147,7 +1152,7 @@ const server = http.createServer(async (req, res) => {
         return res.end(JSON.stringify({ error: 'Invalid JSON body' }));
       }
       try {
-        const ALLOWED_REASONS = ['forfeit', 'postponed', 'rainout'];
+        const ALLOWED_REASONS = ['forfeit', 'postponed', 'abandoned'];
         if (payload.reason) {
           if (!ALLOWED_REASONS.includes(payload.reason)) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -1174,7 +1179,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   // POST /api/match-reports/:gameId/set-referee-paid — independent of the
-  // forfeit/postponed/rainout reason itself, since a pay decision can
+  // forfeit/postponed/abandoned reason itself, since a pay decision can
   // come at a different time. Body: { refereePaid: true|false|null }.
   // Only updates a row that already exists (a reason must already be set)
   // - referee pay status is meaningless without one.
@@ -1204,7 +1209,7 @@ const server = http.createServer(async (req, res) => {
         );
         if (result.rowCount === 0) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
-          return res.end(JSON.stringify({ error: 'No forfeit/postponed/rainout reason set for this game yet.' }));
+          return res.end(JSON.stringify({ error: 'No forfeit/postponed/abandoned reason set for this game yet.' }));
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true }));
@@ -1218,7 +1223,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   // POST /api/match-reports/:gameId/set-charge-status — independent of both
-  // the forfeit/postponed/rainout reason and the referee-paid decision,
+  // the forfeit/postponed/abandoned reason and the referee-paid decision,
   // same reasoning as set-referee-paid: who gets charged for a
   // postponed/cancelled game is often decided separately and later.
   // Body: { chargeStatus: 'teams_charged'|'usccs_charged'|'no_charge'|null }.
@@ -1255,7 +1260,7 @@ const server = http.createServer(async (req, res) => {
         );
         if (result.rowCount === 0) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
-          return res.end(JSON.stringify({ error: 'No forfeit/postponed/rainout reason set for this game yet.' }));
+          return res.end(JSON.stringify({ error: 'No forfeit/postponed/abandoned reason set for this game yet.' }));
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true }));
