@@ -893,7 +893,7 @@ const server = http.createServer(async (req, res) => {
       const [flaggedResult, seManualEntryResult, forfeitResult, entriesResult] = await Promise.all([
         pool.query('SELECT game_id FROM external_report_flags'),
         pool.query('SELECT game_id FROM se_manual_entry_flags'),
-        pool.query('SELECT game_id, reason, referee_paid, charge_status, notes FROM forfeit_flags'),
+        pool.query('SELECT game_id, reason, referee_paid, charge_status, notes, game_start_time FROM forfeit_flags'),
         reportedGameIds.length > 0
           ? pool.query(
               `SELECT game_id, team_id, team_name, person_type, name, event_type, minute, reason
@@ -903,7 +903,7 @@ const server = http.createServer(async (req, res) => {
             )
           : Promise.resolve({ rows: [] }),
       ]);
-      const forfeitInfoByGameId = new Map(forfeitResult.rows.map(r => [r.game_id, { reason: r.reason, referee_paid: r.referee_paid, charge_status: r.charge_status, notes: r.notes }]));
+      const forfeitInfoByGameId = new Map(forfeitResult.rows.map(r => [r.game_id, { reason: r.reason, referee_paid: r.referee_paid, charge_status: r.charge_status, notes: r.notes, game_start_time: r.game_start_time }]));
       const flaggedIds = new Set(flaggedResult.rows.map(r => r.game_id));
       const seManualEntryIds = new Set(seManualEntryResult.rows.map(r => r.game_id));
       const entriesByGameId = new Map();
@@ -929,6 +929,7 @@ const server = http.createServer(async (req, res) => {
       // schedule cache has it), so it's looked up here and attached to
       // every row below regardless of whether a real report exists yet.
       const locationByGameId = new Map(cacheResult.rows.map(g => [g.game_id, g.location_name]));
+      const cacheStartByGameId = new Map(cacheResult.rows.map(g => [g.game_id, g.start_time]));
 
       mergedRows = cacheResult.rows.map(g => {
         const existing = reportByGameId.get(g.game_id);
@@ -990,7 +991,16 @@ const server = http.createServer(async (req, res) => {
       });
 
       let reports = mergedRows.map(r => {
-        const forfeitInfo = forfeitInfoByGameId.get(r.game_id) || null;
+        const rawForfeitInfo = forfeitInfoByGameId.get(r.game_id) || null;
+        // A flag pinned to a start time that no longer matches the game's
+        // current scheduled time means SportsEngine reused this game ID for
+        // a rescheduled game - the old flag is stale: ignored here (so the
+        // game shows as a normal, unreported game) but kept in the table as
+        // history, surfaced as previous_forfeit below.
+        const currentStart = cacheStartByGameId.get(r.game_id);
+        const isStaleForfeit = !!(rawForfeitInfo && rawForfeitInfo.game_start_time && currentStart
+          && new Date(rawForfeitInfo.game_start_time).getTime() !== new Date(currentStart).getTime());
+        const forfeitInfo = isStaleForfeit ? null : rawForfeitInfo;
         const forfeitReason = forfeitInfo ? forfeitInfo.reason : null;
         const isForfeit = forfeitReason != null;
         return {
@@ -1005,6 +1015,7 @@ const server = http.createServer(async (req, res) => {
           // decoupled from whether the MO report itself has been reviewed.
           se_manual_entry: seManualEntryIds.has(r.game_id),
           is_forfeit: isForfeit,
+          previous_forfeit: isStaleForfeit ? { reason: rawForfeitInfo.reason, original_start_time: rawForfeitInfo.game_start_time } : null,
           forfeit_reason: forfeitReason, // 'forfeit' | 'postponed' | 'abandoned' | null
           // Free-text explanation - the only way this ever gets populated
           // today is a referee marking a game "Abandoned" from the matchday
@@ -1158,10 +1169,25 @@ const server = http.createServer(async (req, res) => {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ error: 'reason must be one of: ' + ALLOWED_REASONS.join(', ') }));
           }
+          // game_start_time pins this flag to the game's scheduled time as
+          // of now (from the schedule cache) - if the game is later
+          // rescheduled under the same ID, the flag goes stale (see
+          // schema_forfeit_flags_start_time.sql). Re-flagging a row whose
+          // stored time differs from the current one is a NEW occurrence,
+          // so the previous occurrence's notes / pay / charge decisions
+          // are reset rather than carried over.
           await pool.query(
-            `INSERT INTO forfeit_flags (game_id, reason, flagged_by, flagged_at)
-             VALUES ($1, $2, $3, now())
-             ON CONFLICT (game_id) DO UPDATE SET reason = EXCLUDED.reason, flagged_by = EXCLUDED.flagged_by, flagged_at = now()`,
+            `INSERT INTO forfeit_flags (game_id, reason, flagged_by, flagged_at, game_start_time)
+             VALUES ($1, $2, $3, now(), (SELECT start_time FROM schedule_games_cache WHERE game_id = $1))
+             ON CONFLICT (game_id) DO UPDATE SET
+               reason = EXCLUDED.reason, flagged_by = EXCLUDED.flagged_by, flagged_at = now(),
+               notes = CASE WHEN forfeit_flags.game_start_time IS NOT NULL AND EXCLUDED.game_start_time IS NOT NULL
+                             AND forfeit_flags.game_start_time <> EXCLUDED.game_start_time THEN NULL ELSE forfeit_flags.notes END,
+               referee_paid = CASE WHEN forfeit_flags.game_start_time IS NOT NULL AND EXCLUDED.game_start_time IS NOT NULL
+                             AND forfeit_flags.game_start_time <> EXCLUDED.game_start_time THEN NULL ELSE forfeit_flags.referee_paid END,
+               charge_status = CASE WHEN forfeit_flags.game_start_time IS NOT NULL AND EXCLUDED.game_start_time IS NOT NULL
+                             AND forfeit_flags.game_start_time <> EXCLUDED.game_start_time THEN NULL ELSE forfeit_flags.charge_status END,
+               game_start_time = COALESCE(EXCLUDED.game_start_time, forfeit_flags.game_start_time)`,
             [gameId, payload.reason, session.name || null]
           );
         } else {

@@ -157,6 +157,15 @@
     <button class="box-score-close" onclick="closeIncidentReportModal()">Close</button>
   </div>
 </div>
+
+<div class="box-score-overlay" id="forfeitDetailsOverlay" onclick="if (event.target === this) closeForfeitDetailsModal();">
+  <div class="box-score-modal">
+    <h3 id="forfeitDetailsTitle"></h3>
+    <p class="muted" id="forfeitDetailsSubtitle"></p>
+    <p id="forfeitDetailsBody" style="white-space:pre-wrap; font-size:14px; margin:0;"></p>
+    <button class="box-score-close" onclick="closeForfeitDetailsModal()">Close</button>
+  </div>
+</div>
 <script>
   let selectedDivisionIds = new Set(); // multi-select state for the division filter
   let lastLoadedReports = []; // the most recent server response - "Only show games with a report" filters THIS client-side, no re-fetch
@@ -414,6 +423,35 @@
   // actions area - same behavior either way, but `compact` (mobile only)
   // lays the forfeit/no-report controls out on one flex-wrapped line
   // instead of stacked, to save vertical space in the card.
+  // Clickable "box" preview of the forfeit/postponed/abandoned notes
+  // (truncated to one line) that opens the full text in a modal, same
+  // pattern as Incident Report - rather than dumping the whole note inline
+  // into the row/card. Nothing rendered at all if there are no notes to
+  // show (e.g. an admin-set Forfeit/Postponed with no notes entered).
+  function forfeitDetailsBoxHtml(r, compact) {
+    if (!r.forfeit_notes) return '';
+    const label = reasonLabelFor(r) || 'Forfeit';
+    return `
+      <button onclick="openForfeitDetailsModal('${escapeJs(r.game_id)}')" style="display:block; width:100%; text-align:left; margin-top:${compact ? '6' : '8'}px; padding:7px 10px; background:#fff; border:1px solid var(--border); border-radius:6px; font-size:${compact ? '11' : '11.5'}px; cursor:pointer; font-family:inherit;">
+        <strong>📋 ${escapeHtml(label)}</strong>
+        <div class="muted" style="margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(r.forfeit_notes)}</div>
+      </button>
+    `;
+  }
+
+  // Small note on a game whose earlier Forfeit/Postponed/Abandoned flag went
+  // stale because SportsEngine reused its ID for a rescheduled game (the
+  // flag was pinned to the original start time) - the flag itself is kept
+  // server-side as history, so this just tells admins it happened.
+  function previousForfeitNoteHtml(r) {
+    if (!r.previous_forfeit) return '';
+    const label = r.previous_forfeit.reason ? r.previous_forfeit.reason.charAt(0).toUpperCase() + r.previous_forfeit.reason.slice(1) : 'Flagged';
+    const when = r.previous_forfeit.original_start_time
+      ? new Date(r.previous_forfeit.original_start_time).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short' }) + ' ET'
+      : 'earlier date';
+    return `<div class="muted" style="font-size:10.5px; margin-top:3px;">Rescheduled - previously ${escapeHtml(label)} (${escapeHtml(when)})</div>`;
+  }
+
   function actionsHtml(r, compact) {
     if (r.is_forfeit) {
       if (compact) {
@@ -439,7 +477,8 @@
               <option value="no_charge" ${r.charge_status === 'no_charge' ? 'selected' : ''}>No Charge</option>
             </select>
           </div>
-          ${r.forfeit_notes ? `<div class="muted" style="font-size:11px; margin-top:4px; white-space:pre-wrap;">📝 ${escapeHtml(r.forfeit_notes)}</div>` : ''}
+          ${forfeitDetailsBoxHtml(r, true)}
+          ${r.incident_report ? `<button class="push-score-btn" style="margin-top:4px;" onclick="openIncidentReportModal('${escapeJs(r.game_id)}')">View Incident Report</button>` : ''}
         `;
       }
       return `
@@ -457,7 +496,8 @@
             <option value="false" ${r.referee_paid === false ? 'selected' : ''}>No</option>
           </select>
         </div>
-        ${r.forfeit_notes ? `<div class="muted" style="font-size:11.5px; margin-top:5px; white-space:pre-wrap;">📝 ${escapeHtml(r.forfeit_notes)}</div>` : ''}
+        ${forfeitDetailsBoxHtml(r, false)}
+        ${r.incident_report ? `<button class="push-score-btn" style="margin-top:6px;" onclick="toggleIncidentReport('${escapeJs(r.game_id)}')">View Incident Report</button>` : ''}
       `;
     }
     if (r.has_report) {
@@ -495,10 +535,12 @@
             <option value="abandoned">Abandoned</option>
           </select>
         </div>
+        ${previousForfeitNoteHtml(r)}
       `;
     }
     return `
       <span class="muted" style="font-size:12px; display:block;">No USCCS Report</span>
+      ${previousForfeitNoteHtml(r)}
       <label style="display:flex; align-items:center; gap:5px; font-size:11.5px; font-weight:400; margin-top:4px; cursor:pointer;">
         <input type="checkbox" ${r.flagged_external ? 'checked' : ''} onchange="toggleExternalFlag('${escapeJs(r.game_id)}', this.checked)" />
         MO report reviewed
@@ -582,7 +624,7 @@
               ${!r.is_forfeit ? `<div class="mr-card-cards">${cardCount(r.team2_yellow_count, 'yc-count')}${cardCount(r.team2_red_count, 'rc-count')}</div>` : ''}
               <div class="mr-card-team">${escapeHtml(r.team2_name)}</div>
             </div>
-            ${r.incident_report ? `<div class="mr-card-incident-row"><button class="push-score-btn" onclick="openIncidentReportModal('${escapeJs(r.game_id)}')">View Incident Report</button></div>` : ''}
+            ${r.incident_report && !r.is_forfeit ? `<div class="mr-card-incident-row"><button class="push-score-btn" onclick="openIncidentReportModal('${escapeJs(r.game_id)}')">View Incident Report</button></div>` : ''}
             <div class="mr-card-actions">${actionsHtml(r, true)}</div>
           </div>
         `;
@@ -647,6 +689,26 @@
 
   function closeIncidentReportModal() {
     document.getElementById('incidentReportOverlay').classList.remove('open');
+  }
+
+  // Shows the forfeit/postponed/abandoned reason's notes (the referee's
+  // own explanation, for a game marked Abandoned from the matchday app -
+  // see checkin_server.js's mark-abandoned endpoint - or whatever an admin
+  // typed in for Forfeit/Postponed) in the same modal pattern as the
+  // Incident Report, rather than inline in the row/card.
+  function openForfeitDetailsModal(gameId) {
+    const r = lastLoadedReports.find(x => x.game_id === gameId);
+    if (!r) return;
+    const label = reasonLabelFor(r) || 'Forfeit';
+
+    document.getElementById('forfeitDetailsTitle').textContent = label;
+    document.getElementById('forfeitDetailsSubtitle').textContent = r.team1_name + ' vs ' + r.team2_name;
+    document.getElementById('forfeitDetailsBody').textContent = r.forfeit_notes || 'No additional details provided.';
+    document.getElementById('forfeitDetailsOverlay').classList.add('open');
+  }
+
+  function closeForfeitDetailsModal() {
+    document.getElementById('forfeitDetailsOverlay').classList.remove('open');
   }
 
   function escapeJs(str) {
