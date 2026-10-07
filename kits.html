@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>USCCS Admin Console — Team Kits</title>
+  <style>
+    :root { --navy: #11213F; --gold: #E7C247; --bg: #F4F6FA; --border: #E1E5EC; --gray: #5A6472; --danger: #C0392B; --ok: #1E7A46; }
+    body { font-family: -apple-system, sans-serif; background: var(--bg); margin: 0; color: #1a1a1a; }
+    header { background: var(--navy); color: var(--gold); padding: 14px 20px; font-weight: 700; font-size: 17px; display: flex; align-items: center; justify-content: space-between; }
+    header a { color: #6BC4E8; text-decoration: none; font-size: 13px; font-weight: 600; }
+    main { max-width: 1250px; margin: 0 auto; padding: 24px; }
+    .card { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 18px; }
+    .muted { color: var(--gray); font-size: 13px; }
+    .filters { display: flex; flex-wrap: wrap; gap: 14px; align-items: end; }
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    .field label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--gray); }
+    .field select, .field input { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13.5px; min-width: 140px; }
+    button { padding: 8px 16px; border-radius: 6px; border: none; background: var(--navy); color: #fff; font-weight: 600; cursor: pointer; font-size: 13.5px; }
+    button:hover:not(:disabled) { opacity: .9; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    button.secondary { background: #fff; color: var(--navy); border: 1px solid var(--border); }
+    button.danger { background: #fff; color: var(--danger); border: 1px solid var(--border); }
+    .err-box { background: #FBEAE8; color: var(--danger); padding: 10px 14px; border-radius: 6px; margin-top: 10px; font-size: 13px; }
+
+    .team-card { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; margin-bottom: 10px; }
+    .team-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+    .team-name { font-weight: 700; font-size: 15px; color: var(--navy); }
+    .badge { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 10px; background: #FDF0DD; color: #8A6210; }
+    .badge.ok { background: #E3F4EA; color: var(--ok); }
+    .kit-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    .kit-tile { border: 1px solid var(--border); border-radius: 8px; padding: 8px; text-align: center; background: var(--bg); }
+    .kit-tile .kit-label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--gray); margin-bottom: 4px; }
+    .kit-visual { height: 96px; display: flex; align-items: center; justify-content: center; }
+    .thumb-strip { display: flex; gap: 4px; justify-content: center; margin-top: 4px; min-height: 0; }
+    .thumb-strip img { width: 34px; height: 34px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border); cursor: zoom-in; background: #fff; }
+    .kit-visual svg { height: 92px; width: auto; }
+    .kit-colors { font-size: 11px; color: var(--gray); margin-top: 4px; min-height: 28px; line-height: 1.35; }
+    .kit-colors .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; border: 1px solid rgba(0,0,0,.25); vertical-align: -1px; margin-right: 3px; }
+    .kit-tile button { margin-top: 6px; padding: 4px 12px; font-size: 12px; }
+
+    .overlay { display: none; position: fixed; inset: 0; background: rgba(17,33,63,0.55); z-index: 100; align-items: center; justify-content: center; padding: 20px; }
+    .overlay.open { display: flex; }
+    .modal { background: #fff; border-radius: 10px; max-width: 520px; width: 100%; max-height: 90vh; overflow-y: auto; padding: 20px; }
+    .modal h3 { margin: 0 0 2px; font-size: 16px; color: var(--navy); }
+    .color-row { display: grid; grid-template-columns: 80px 1fr auto; gap: 10px; align-items: center; margin: 10px 0; }
+    .color-row label { font-size: 12px; font-weight: 700; text-transform: uppercase; color: var(--gray); }
+    .color-row select { padding: 7px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 13.5px; }
+    .swatch { width: 28px; height: 28px; border-radius: 6px; border: 1px solid rgba(0,0,0,.3); }
+    .swatch.none { background: repeating-linear-gradient(45deg, #fff, #fff 4px, #E1E5EC 4px, #E1E5EC 8px); }
+    .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
+    .part-block { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px 10px; margin: 10px 0; }
+    .part-photo { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+    .part-photo img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); }
+    .part-photo .noimg { width: 56px; height: 56px; border-radius: 6px; border: 1px dashed #B8C0CC; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #9aa3b0; text-align: center; }
+    .part-photo button { padding: 5px 10px; font-size: 12px; }
+    .status-line { font-size: 12.5px; margin-top: 6px; }
+    #lightbox img { max-width: 92vw; max-height: 90vh; border-radius: 8px; background: #fff; }
+
+    @media (max-width: 720px) {
+      main { padding: 14px; }
+      .kit-row { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+<header>
+  USCCS Admin Console — Team Kits
+  <span style="display:flex; align-items:center; gap:16px;">
+    <a href="/">Misconduct Review</a>
+    <a href="/match-reports">Match Reports</a>
+    <a href="/oauth/logout">Log out</a>
+  </span>
+</header>
+<main>
+  <div class="card">
+    <div class="filters">
+      <div class="field"><label for="searchBox">Team</label><input type="text" id="searchBox" placeholder="Search teams..." oninput="renderTeams()" /></div>
+      <div class="field"><label for="confFilter">Conference</label><select id="confFilter" onchange="renderTeams()"><option value="">All</option></select></div>
+      <div class="field"><label for="genderFilter">Gender</label>
+        <select id="genderFilter" onchange="renderTeams()"><option value="">All</option><option value="Men">Men</option><option value="Women">Women</option></select></div>
+      <div class="field"><label for="showFilter">Show</label>
+        <select id="showFilter" onchange="renderTeams()">
+          <option value="all">All teams</option>
+          <option value="incomplete">Missing kit info</option>
+          <option value="complete">Complete</option>
+        </select></div>
+    </div>
+    <p class="muted" style="margin:10px 0 0;" id="summaryLine">Loading…</p>
+    <div id="pageError"></div>
+  </div>
+  <div id="teamsBox"></div>
+</main>
+
+<!-- Edit kit modal -->
+<div class="overlay" id="editOverlay" onclick="if (event.target === this) closeEdit();">
+  <div class="modal">
+    <h3 id="editTitle"></h3>
+    <div class="muted" id="editSubtitle" style="margin-bottom:6px;"></div>
+    <div id="colorRows"></div>
+    <div class="status-line" id="colorStatus"></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeEdit()">Close</button>
+      <button id="saveColorsBtn" onclick="saveColors()">Save Colors</button>
+    </div>
+    <input type="file" id="photoInput" accept="image/jpeg,image/png,image/webp" style="display:none;" onchange="onPhotoChosen(this)" />
+  </div>
+</div>
+
+<div class="overlay" id="lightbox" onclick="this.classList.remove('open')"><img id="lightboxImg" alt="" /></div>
+
+<script>
+  const KIT_TYPES = ['home', 'away', 'gk_primary', 'gk_secondary'];
+  const KIT_LABELS = { home: 'Home', away: 'Away', gk_primary: 'GK Primary', gk_secondary: 'GK Secondary' };
+  const PARTS = [['jersey_color', 'Jersey'], ['shorts_color', 'Shorts'], ['socks_color', 'Socks']];
+  const PRESET_COLORS = [
+    ['White', '#FFFFFF'], ['Black', '#111111'], ['Gray', '#808080'], ['Silver', '#C0C0C0'],
+    ['Red', '#D32F2F'], ['Maroon', '#800000'], ['Orange', '#F57C00'], ['Yellow', '#FFD600'],
+    ['Gold', '#D4AF37'], ['Lime / Neon Green', '#76FF03'], ['Green', '#2E7D32'], ['Dark Green', '#004D25'],
+    ['Teal', '#00897B'], ['Light Blue', '#4FC3F7'], ['Royal Blue', '#1E4FD8'], ['Navy', '#0B1F4B'],
+    ['Purple', '#6A1B9A'], ['Pink', '#E91E63'], ['Brown', '#6D4C41'],
+  ];
+  let teams = [];
+  let uploadConfigured = false;
+  let editing = null; // { teamId, kitType }
+
+  function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+  function escapeJs(s) { return String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'"); }
+
+  function colorName(hex) {
+    if (!hex) return null;
+    const m = PRESET_COLORS.find(([, h]) => h.toLowerCase() === hex.toLowerCase());
+    return m ? m[0] : hex.toUpperCase();
+  }
+
+  // Simple kit illustration (jersey / shorts / socks) from three hex colors.
+  // Unset parts render as a dashed light-gray outline.
+  function kitSvg(kit) {
+    kit = kit || {};
+    const part = (hex, d) => hex
+      ? `<path d="${d}" fill="${hex}" stroke="rgba(0,0,0,.35)" stroke-width="1.2" stroke-linejoin="round"/>`
+      : `<path d="${d}" fill="#F4F6FA" stroke="#B8C0CC" stroke-width="1.2" stroke-dasharray="3 2" stroke-linejoin="round"/>`;
+    const jersey = 'M18 4 L26 2 Q32 9 38 2 L46 4 L58 18 L49 27 L45 22 L45 44 L19 44 L19 22 L15 27 L6 18 Z';
+    const shorts = 'M19 46 L45 46 L48 68 L34 68 L32 57 L30 68 L16 68 Z';
+    const sockL = 'M17 71 L28 71 L27 95 Q22 98 17 95 Z';
+    const sockR = 'M36 71 L47 71 L47 95 Q42 98 37 95 Z';
+    return `<svg viewBox="0 0 64 100" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Kit">
+      ${part(kit.jersey_color, jersey)}${part(kit.shorts_color, shorts)}${part(kit.socks_color, sockL)}${part(kit.socks_color, sockR)}</svg>`;
+  }
+
+    function kitIsComplete(k) { return !!(k && k.jersey_color && k.shorts_color && k.socks_color); }
+  function teamKitCount(t) { return KIT_TYPES.filter(kt => kitIsComplete(t.kits[kt])).length; }
+
+  function colorsSummaryHtml(k) {
+    if (!k) return '<span style="color:#9aa3b0;">Not set</span>';
+    return PARTS.map(([key, label]) => k[key]
+      ? `<span><span class="dot" style="background:${k[key]};"></span>${label[0]}: ${escapeHtml(colorName(k[key]))}</span>`
+      : `<span style="color:#9aa3b0;">${label[0]}: —</span>`).join('<br>');
+  }
+
+  function kitTileHtml(t, kt) {
+    const k = t.kits[kt];
+    const thumbs = k ? PARTS.map(([key, label]) => {
+      const u = k[key.replace('_color', '_image_url')];
+      return u ? `<img src="${escapeHtml(u)}" alt="${label} photo" title="${label} photo" loading="lazy" onclick="openLightbox('${escapeJs(u)}')" />` : '';
+    }).join('') : '';
+    return `<div class="kit-tile">
+      <div class="kit-label">${KIT_LABELS[kt]}</div>
+      <div class="kit-visual">${kitSvg(k)}</div>
+      ${thumbs ? `<div class="thumb-strip">${thumbs}</div>` : ''}
+      <div class="kit-colors">${colorsSummaryHtml(k)}</div>
+      <button class="secondary" onclick="openEdit('${escapeJs(t.team_id)}','${kt}')">Edit</button>
+    </div>`;
+  }
+
+  function renderTeams() {
+    const q = document.getElementById('searchBox').value.trim().toLowerCase();
+    const conf = document.getElementById('confFilter').value;
+    const gender = document.getElementById('genderFilter').value;
+    const show = document.getElementById('showFilter').value;
+    const list = teams.filter(t =>
+      (!q || (t.team_name || '').toLowerCase().includes(q)) &&
+      (!conf || t.conference === conf) &&
+      (!gender || t.gender === gender) &&
+      (show === 'all' || (show === 'complete') === (teamKitCount(t) === 4)));
+    const completeTotal = teams.filter(t => teamKitCount(t) === 4).length;
+    document.getElementById('summaryLine').textContent =
+      `${list.length} of ${teams.length} teams shown · ${completeTotal} teams have all 4 kits fully set.`;
+    document.getElementById('teamsBox').innerHTML = list.length ? list.map(t => {
+      const n = teamKitCount(t);
+      return `<div class="team-card">
+        <div class="team-head">
+          <span class="team-name">${escapeHtml(t.team_name)}</span>
+          <span class="muted">${escapeHtml([t.division_name, t.gender, t.conference].filter(Boolean).join(' · '))}</span>
+          <span class="badge ${n === 4 ? 'ok' : ''}">${n}/4 kits set</span>
+        </div>
+        <div class="kit-row">${KIT_TYPES.map(kt => kitTileHtml(t, kt)).join('')}</div>
+      </div>`;
+    }).join('') : '<p class="muted">No teams match these filters.</p>';
+  }
+
+  async function loadKits() {
+    try {
+      const resp = await fetch('/api/kits');
+      if (resp.status === 401) { window.location.href = '/oauth/login'; return; }
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'Failed to load kits');
+      teams = data.teams;
+      uploadConfigured = !!data.uploadConfigured;
+      const confs = [...new Set(teams.map(t => t.conference).filter(Boolean))].sort();
+      document.getElementById('confFilter').innerHTML = '<option value="">All</option>' + confs.map(c => `<option>${escapeHtml(c)}</option>`).join('');
+      renderTeams();
+    } catch (e) {
+      document.getElementById('summaryLine').textContent = '';
+      document.getElementById('pageError').innerHTML = `<div class="err-box">${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  // ---- Edit modal ----
+  function findTeam(id) { return teams.find(t => t.team_id === id); }
+
+  function partPhotoHtml(key, label, url) {
+    const part = key.replace('_color', '');
+    return `<div class="part-photo" id="photo_${part}">
+      ${url ? `<img src="${escapeHtml(url)}" alt="${label} photo" />` : '<div class="noimg">No photo</div>'}
+      <button type="button" class="secondary" ${uploadConfigured ? '' : 'disabled'} onclick="choosePhoto('${part}')">${url ? 'Replace photo' : 'Upload photo'}</button>
+      ${url ? `<button type="button" class="danger" onclick="removePhoto('${part}')">Remove</button>` : ''}
+      <span class="status-line" id="photoStatus_${part}" style="margin:0;"></span>
+    </div>`;
+  }
+
+  function colorRowHtml(key, label, hex, imageUrl) {
+    const isPreset = !hex || PRESET_COLORS.some(([, h]) => h.toLowerCase() === hex.toLowerCase());
+    return `<div class="part-block"><div class="color-row" style="margin:0 0 4px;">
+      <label>${label}</label>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <select id="sel_${key}" onchange="onColorSelect('${key}')">
+          <option value="">— Not set —</option>
+          ${PRESET_COLORS.map(([n, h]) => `<option value="${h}" ${hex && h.toLowerCase() === hex.toLowerCase() ? 'selected' : ''}>${n}</option>`).join('')}
+          <option value="custom" ${hex && !isPreset ? 'selected' : ''}>Custom…</option>
+        </select>
+        <input type="color" id="pick_${key}" value="${hex || '#808080'}" style="display:${hex && !isPreset ? 'inline-block' : 'none'}; width:40px; height:30px; padding:0; border:1px solid var(--border);" oninput="onColorSelect('${key}', true)" />
+      </div>
+      <div class="swatch ${hex ? '' : 'none'}" id="sw_${key}" style="${hex ? 'background:' + hex : ''}"></div>
+    </div>
+    ${partPhotoHtml(key, label, imageUrl)}</div>`;
+  }
+
+  function currentColor(key) {
+    const sel = document.getElementById('sel_' + key).value;
+    if (sel === 'custom') return document.getElementById('pick_' + key).value.toUpperCase();
+    return sel || null;
+  }
+  function onColorSelect(key, fromPicker) {
+    const sel = document.getElementById('sel_' + key);
+    const pick = document.getElementById('pick_' + key);
+    if (fromPicker) sel.value = 'custom';
+    pick.style.display = sel.value === 'custom' ? 'inline-block' : 'none';
+    const c = currentColor(key);
+    const sw = document.getElementById('sw_' + key);
+    sw.className = 'swatch' + (c ? '' : ' none');
+    sw.style.background = c || '';
+  }
+
+  function openEdit(teamId, kitType) {
+    const t = findTeam(teamId);
+    if (!t) return;
+    editing = { teamId, kitType };
+    const k = t.kits[kitType] || {};
+    document.getElementById('editTitle').textContent = `${t.team_name} — ${KIT_LABELS[kitType]} Kit`;
+    document.getElementById('editSubtitle').textContent = [t.division_name, t.gender].filter(Boolean).join(' · ');
+    document.getElementById('colorRows').innerHTML = PARTS.map(([key, label]) => colorRowHtml(key, label, k[key], k[key.replace('_color', '_image_url')])).join('');
+    document.getElementById('colorStatus').textContent = '';
+    if (!uploadConfigured) document.getElementById('colorStatus').innerHTML = '<span style="color:var(--danger);">Photo upload is not configured yet (SUPABASE_URL / SUPABASE_SERVICE_KEY missing on the admin app). Colors still save.</span>';
+    document.getElementById('editOverlay').classList.add('open');
+  }
+  function closeEdit() { document.getElementById('editOverlay').classList.remove('open'); editing = null; renderTeams(); }
+
+  function setKitLocal(patch) {
+    const t = findTeam(editing.teamId);
+    t.kits[editing.kitType] = Object.assign({}, t.kits[editing.kitType] || {}, patch);
+  }
+
+  async function saveColors() {
+    const body = {};
+    PARTS.forEach(([key]) => { body[key] = currentColor(key); });
+    const btn = document.getElementById('saveColorsBtn');
+    const status = document.getElementById('colorStatus');
+    btn.disabled = true; status.textContent = 'Saving…'; status.style.color = '';
+    try {
+      const resp = await fetch(`/api/kits/${encodeURIComponent(editing.teamId)}/${editing.kitType}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'Save failed');
+      setKitLocal(body);
+      status.textContent = 'Saved.'; status.style.color = 'var(--ok)';
+    } catch (e) {
+      status.textContent = e.message; status.style.color = 'var(--danger)';
+    } finally { btn.disabled = false; }
+  }
+
+  // Downsize in the browser (max 1200px, JPEG) so uploads stay small and fast.
+  function resizeImageToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const objUrl = URL.createObjectURL(file);
+      img.onload = () => {
+        const max = 1200;
+        const scale = Math.min(1, max / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(objUrl);
+        resolve({ contentType: 'image/jpeg', dataBase64: canvas.toDataURL('image/jpeg', 0.86).split(',')[1] });
+      };
+      img.onerror = () => { URL.revokeObjectURL(objUrl); reject(new Error('Could not read that image.')); };
+      img.src = objUrl;
+    });
+  }
+
+  let pendingPart = null;
+  function choosePhoto(part) { pendingPart = part; document.getElementById('photoInput').click(); }
+
+  // Re-draw just one part's photo controls (leaves unsaved color choices alone).
+  function refreshPartPhoto(part) {
+    const k = findTeam(editing.teamId).kits[editing.kitType] || {};
+    const label = PARTS.find(([key]) => key.startsWith(part))[1];
+    const el = document.getElementById('photo_' + part);
+    el.outerHTML = partPhotoHtml(part + '_color', label, k[part + '_image_url']);
+  }
+  function setPartStatus(part, msg, color) {
+    const el = document.getElementById('photoStatus_' + part);
+    if (el) { el.textContent = msg; el.style.color = color || ''; }
+  }
+
+  async function onPhotoChosen(input) {
+    const file = input.files && input.files[0];
+    const part = pendingPart;
+    input.value = '';
+    if (!file || !editing || !part) return;
+    setPartStatus(part, 'Uploading…');
+    try {
+      const payload = await resizeImageToBase64(file);
+      const resp = await fetch(`/api/kits/${encodeURIComponent(editing.teamId)}/${editing.kitType}/image/${part}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'Upload failed');
+      setKitLocal({ [part + '_image_url']: data.image_url });
+      refreshPartPhoto(part);
+      setPartStatus(part, 'Uploaded.', 'var(--ok)');
+    } catch (e) { setPartStatus(part, e.message, 'var(--danger)'); }
+  }
+
+  async function removePhoto(part) {
+    if (!editing || !confirm('Remove this photo?')) return;
+    try {
+      const resp = await fetch(`/api/kits/${encodeURIComponent(editing.teamId)}/${editing.kitType}/image/${part}`, { method: 'DELETE' });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'Remove failed');
+      setKitLocal({ [part + '_image_url']: null });
+      refreshPartPhoto(part);
+      setPartStatus(part, 'Removed.', 'var(--ok)');
+    } catch (e) { setPartStatus(part, e.message, 'var(--danger)'); }
+  }
+
+  function openLightbox(url) {
+    document.getElementById('lightboxImg').src = url;
+    document.getElementById('lightbox').classList.add('open');
+  }
+
+  loadKits();
+</script>
+</body>
+</html>

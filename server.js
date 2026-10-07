@@ -649,6 +649,133 @@ async function runAutomaticScheduleSync() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// TEAM KITS - the league sets, per team, four kits (home, away, GK primary,
+// GK secondary), each with a jersey, shorts and socks color, plus an optional
+// photo for each of the three parts. Photos live in a Supabase Storage bucket; the DB stores only the URL.
+//
+// ENV (only needed for photo upload - colors work without them):
+//   SUPABASE_URL          e.g. https://abcd1234.supabase.co
+//   SUPABASE_SERVICE_KEY  service_role key (server-side only, never sent to the browser)
+//   KIT_IMAGE_BUCKET      (optional) defaults to "team-kits" - create it in
+//                         Supabase Storage and mark it PUBLIC.
+// ---------------------------------------------------------------------------
+const KIT_TYPES = ['home', 'away', 'gk_primary', 'gk_secondary'];
+const KIT_PARTS = ['jersey', 'shorts', 'socks']; // each has a color AND an optional photo
+const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/, '');
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
+const KIT_IMAGE_BUCKET = process.env.KIT_IMAGE_BUCKET || 'team-kits';
+const KIT_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
+const KIT_IMAGE_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+const OZARK_KIT_EXCLUDED_DIVISIONS = ['6a4e96e46b8d1e01201ee2ce', '6a4e9b904b609600f0e70d42'];
+
+async function ensureTeamKitsTable() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS team_kits (
+        team_id TEXT NOT NULL,
+        kit_type TEXT NOT NULL CHECK (kit_type IN ('home','away','gk_primary','gk_secondary')),
+        jersey_color TEXT,
+        shorts_color TEXT,
+        socks_color TEXT,
+        image_url TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_by TEXT,
+        PRIMARY KEY (team_id, kit_type)
+      )
+    `);
+    // One optional photo each for the jersey, shorts and socks of a kit.
+    await pool.query(`
+      ALTER TABLE team_kits
+        ADD COLUMN IF NOT EXISTS jersey_image_url TEXT,
+        ADD COLUMN IF NOT EXISTS shorts_image_url TEXT,
+        ADD COLUMN IF NOT EXISTS socks_image_url TEXT
+    `);
+  } catch (err) {
+    console.error('[kits] Could not ensure team_kits table exists:', err.message);
+  }
+}
+
+// Full team list for the Kits page. Prefers division_team_list.json (every
+// team in the league, even ones with no games cached yet) when it is deployed
+// next to this file; always merged with teams seen in schedule_games_cache.
+let kitTeamListFromFile = null;
+function loadKitTeamListFile() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(__dirname, 'division_team_list.json'), 'utf8'));
+    const out = [];
+    for (const d of raw) {
+      for (const t of (d.teams || [])) {
+        out.push({ team_id: t.id, team_name: t.name, division_id: d.division_id, gender: d.gender || null });
+      }
+    }
+    kitTeamListFromFile = out;
+  } catch (e) {
+    kitTeamListFromFile = [];
+    console.warn('[kits] division_team_list.json not found next to admin_server.js - Kits page will only list teams found in the schedule cache.');
+  }
+}
+
+function groupKitRows(rows) {
+  const byTeam = {};
+  for (const r of rows) {
+    (byTeam[r.team_id] = byTeam[r.team_id] || {})[r.kit_type] = {
+      jersey_color: r.jersey_color, shorts_color: r.shorts_color, socks_color: r.socks_color,
+      jersey_image_url: r.jersey_image_url, shorts_image_url: r.shorts_image_url, socks_image_url: r.socks_image_url,
+    };
+  }
+  return byTeam;
+}
+
+function readJsonBody(req, limitBytes) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limitBytes) { reject(Object.assign(new Error('Request body too large'), { statusCode: 413 })); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')); }
+      catch (e) { reject(Object.assign(new Error('Invalid JSON body'), { statusCode: 400 })); }
+    });
+    req.on('error', reject);
+  });
+}
+
+function supabaseStorageRequest(method, storagePath, bodyBuf, contentType) {
+  return new Promise((resolve, reject) => {
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+      return reject(new Error('Photo upload is not configured: set SUPABASE_URL and SUPABASE_SERVICE_KEY on the admin app.'));
+    }
+    const u = new URL(`${SUPABASE_URL}/storage/v1/object/${KIT_IMAGE_BUCKET}/${storagePath}`);
+    const headers = { Authorization: 'Bearer ' + SUPABASE_SERVICE_KEY, apikey: SUPABASE_SERVICE_KEY };
+    if (bodyBuf) { headers['Content-Type'] = contentType; headers['Content-Length'] = bodyBuf.length; headers['x-upsert'] = 'true'; }
+    const r = https.request({ hostname: u.hostname, path: u.pathname, method, headers }, (resp) => {
+      let data = '';
+      resp.on('data', (c) => (data += c));
+      resp.on('end', () => {
+        if (resp.statusCode >= 200 && resp.statusCode < 300) return resolve(data);
+        reject(new Error(`Supabase Storage ${method} failed (${resp.statusCode}): ${data.slice(0, 200)}`));
+      });
+    });
+    r.on('error', reject);
+    r.setTimeout(20000, () => { r.destroy(); reject(new Error('Timed out talking to Supabase Storage (20s).')); });
+    if (bodyBuf) r.write(bodyBuf);
+    r.end();
+  });
+}
+
+function kitPublicUrl(storagePath) {
+  return `${SUPABASE_URL}/storage/v1/object/public/${KIT_IMAGE_BUCKET}/${storagePath}`;
+}
+function kitStoragePathFromUrl(url) {
+  const marker = `/storage/v1/object/public/${KIT_IMAGE_BUCKET}/`;
+  const i = url ? url.indexOf(marker) : -1;
+  return i === -1 ? null : url.slice(i + marker.length);
+}
+
 const HTML_FILE = path.join(__dirname, 'index.html');
 
 const server = http.createServer(async (req, res) => {
@@ -1039,8 +1166,20 @@ const server = http.createServer(async (req, res) => {
         };
       });
 
+      // Kits for just the teams appearing in this result set, sent once
+      // (not per row) so the payload stays small.
+      let kitsByTeam = {};
+      try {
+        const teamIds = [...new Set(reports.flatMap(r => [r.team1_id, r.team2_id]).filter(Boolean))];
+        if (teamIds.length) {
+          const kitResult = await pool.query('SELECT * FROM team_kits WHERE team_id = ANY($1)', [teamIds]);
+          kitsByTeam = groupKitRows(kitResult.rows);
+        }
+      } catch (kitErr) {
+        console.error('[api/match-reports] Could not load kits (continuing without):', kitErr.message);
+      }
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ reports }));
+      res.end(JSON.stringify({ reports, kits_by_team: kitsByTeam }));
     } catch (err) {
       console.error('[api/match-reports] Error:', err.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -1599,6 +1738,181 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ---- Team kits -----------------------------------------------------------
+  // GET /api/kits - every team (full league list + anything in the schedule
+  // cache) with its four kits, for the Kits page.
+  if (req.method === 'GET' && url.pathname === '/api/kits') {
+    const session = await getSession(cookies.admin_session);
+    if (!session) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Not logged in' }));
+    }
+    try {
+      if (kitTeamListFromFile === null) loadKitTeamListFile();
+      const [cacheTeams, kitRows] = await Promise.all([
+        pool.query(`
+          SELECT DISTINCT team_id, team_name, division_id, gender FROM (
+            SELECT home_team_id AS team_id, home_team AS team_name, division_id, gender FROM schedule_games_cache
+            UNION
+            SELECT away_team_id, away_team, division_id, gender FROM schedule_games_cache
+          ) t WHERE team_id IS NOT NULL
+        `),
+        pool.query('SELECT * FROM team_kits'),
+      ]);
+      const byTeam = new Map();
+      for (const t of [...kitTeamListFromFile, ...cacheTeams.rows]) {
+        if (!t.team_id || byTeam.has(t.team_id)) continue; // file entry wins (it comes first)
+        byTeam.set(t.team_id, t);
+      }
+      const kits = groupKitRows(kitRows.rows);
+      const teams = [...byTeam.values()]
+        .filter(t => !OZARK_KIT_EXCLUDED_DIVISIONS.includes(t.division_id))
+        .map(t => {
+          const info = t.division_id ? DIVISION_LOOKUP[t.division_id] : null;
+          return {
+            team_id: t.team_id,
+            team_name: t.team_name,
+            division_id: t.division_id || null,
+            division_name: info ? info.name : null,
+            conference: info ? info.conference : null,
+            gender: t.gender || (info && info.gender) || null,
+            kits: kits[t.team_id] || {},
+          };
+        })
+        .sort((a, b) => (a.team_name || '').localeCompare(b.team_name || ''));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ teams, uploadConfigured: !!(SUPABASE_URL && SUPABASE_SERVICE_KEY) }));
+    } catch (err) {
+      console.error('[api/kits] Error:', err.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  // PUT /api/kits/:teamId/:kitType - save the three colors for one kit.
+  // Body: { jersey_color, shorts_color, socks_color } - each "#RRGGBB" or null.
+  const kitColorsMatch = url.pathname.match(/^\/api\/kits\/([^/]+)\/([a-z_]+)$/);
+  if (req.method === 'PUT' && kitColorsMatch) {
+    const session = await getSession(cookies.admin_session);
+    if (!session) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Not logged in' }));
+    }
+    const teamId = decodeURIComponent(kitColorsMatch[1]);
+    const kitType = kitColorsMatch[2];
+    if (!KIT_TYPES.includes(kitType)) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Unknown kit type' }));
+    }
+    try {
+      const payload = await readJsonBody(req, 10 * 1024);
+      const colors = {};
+      for (const k of ['jersey_color', 'shorts_color', 'socks_color']) {
+        const v = payload[k];
+        if (v == null || v === '') { colors[k] = null; continue; }
+        if (typeof v !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(v)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: `${k} must be a #RRGGBB color` }));
+        }
+        colors[k] = v.toUpperCase();
+      }
+      await pool.query(
+        `INSERT INTO team_kits (team_id, kit_type, jersey_color, shorts_color, socks_color, updated_by)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (team_id, kit_type) DO UPDATE SET
+           jersey_color = EXCLUDED.jersey_color, shorts_color = EXCLUDED.shorts_color,
+           socks_color = EXCLUDED.socks_color, updated_at = now(), updated_by = EXCLUDED.updated_by`,
+        [teamId, kitType, colors.jersey_color, colors.shorts_color, colors.socks_color, session.name || null]
+      );
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true }));
+    } catch (err) {
+      console.error('[api/kits PUT] Error:', err.message);
+      res.writeHead(err.statusCode || 500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  // POST /api/kits/:teamId/:kitType/image/:part - upload the photo for ONE
+  // part of a kit (part = jersey | shorts | socks).
+  // Body: { contentType, dataBase64 } (the page downsizes before sending).
+  // DELETE on the same path removes it.
+  const kitImageMatch = url.pathname.match(/^\/api\/kits\/([^/]+)\/([a-z_]+)\/image\/(jersey|shorts|socks)$/);
+  if ((req.method === 'POST' || req.method === 'DELETE') && kitImageMatch) {
+    const session = await getSession(cookies.admin_session);
+    if (!session) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Not logged in' }));
+    }
+    const teamId = decodeURIComponent(kitImageMatch[1]);
+    const kitType = kitImageMatch[2];
+    const part = kitImageMatch[3];
+    const col = part + '_image_url'; // safe: part is whitelisted by the route regex
+    if (!KIT_TYPES.includes(kitType)) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Unknown kit type' }));
+    }
+    try {
+      const prior = await pool.query(`SELECT ${col} AS image_url FROM team_kits WHERE team_id = $1 AND kit_type = $2`, [teamId, kitType]);
+      const oldPath = prior.rows[0] && kitStoragePathFromUrl(prior.rows[0].image_url);
+      if (req.method === 'POST') {
+        const payload = await readJsonBody(req, Math.ceil(KIT_IMAGE_MAX_BYTES * 1.4) + 2048);
+        const ext = KIT_IMAGE_TYPES[payload.contentType];
+        if (!ext || typeof payload.dataBase64 !== 'string') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'Image must be JPEG, PNG or WebP.' }));
+        }
+        const buf = Buffer.from(payload.dataBase64, 'base64');
+        if (!buf.length || buf.length > KIT_IMAGE_MAX_BYTES) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'Image is empty or larger than 4 MB.' }));
+        }
+        // New object name each upload so the CDN/browser never serves a stale photo.
+        const storagePath = `${encodeURIComponent(teamId)}/${kitType}-${part}-${Date.now()}.${ext}`;
+        await supabaseStorageRequest('POST', storagePath, buf, payload.contentType);
+        const imageUrl = kitPublicUrl(storagePath);
+        await pool.query(
+          `INSERT INTO team_kits (team_id, kit_type, ${col}, updated_by) VALUES ($1, $2, $3, $4)
+           ON CONFLICT (team_id, kit_type) DO UPDATE SET ${col} = EXCLUDED.${col}, updated_at = now(), updated_by = EXCLUDED.updated_by`,
+          [teamId, kitType, imageUrl, session.name || null]
+        );
+        if (oldPath) supabaseStorageRequest('DELETE', oldPath).catch((e) => console.warn('[kits] Could not delete old image:', e.message));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: true, image_url: imageUrl }));
+      }
+      await pool.query(`UPDATE team_kits SET ${col} = NULL, updated_at = now(), updated_by = $3 WHERE team_id = $1 AND kit_type = $2`,
+        [teamId, kitType, session.name || null]);
+      if (oldPath) supabaseStorageRequest('DELETE', oldPath).catch((e) => console.warn('[kits] Could not delete old image:', e.message));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true }));
+    } catch (err) {
+      console.error('[api/kits image] Error:', err.message);
+      res.writeHead(err.statusCode || 500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  // GET /kits - the all-team kits page. Same auth gate as the other pages.
+  if (req.method === 'GET' && url.pathname === '/kits') {
+    const session = await getSession(cookies.admin_session);
+    if (!session) {
+      res.writeHead(302, { Location: '/oauth/login' });
+      return res.end();
+    }
+    fs.readFile(path.join(__dirname, 'kits.html'), 'utf8', (err, data) => {
+      if (err) {
+        res.writeHead(404);
+        return res.end('kits.html not found — make sure it is in the same folder as server.js');
+      }
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(data);
+    });
+    return;
+  }
+
   // GET / — the main page. Requires a valid session; redirects to login if not.
   if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
     const session = await getSession(cookies.admin_session);
@@ -1663,6 +1977,8 @@ server.listen(PORT, async () => {
   // so there's fresh data right away, then on the configured interval.
   await ensureLogoColumns();
   await ensureSeManualEntryTable();
+  await ensureTeamKitsTable();
+  loadKitTeamListFile();
   runAutomaticScheduleSync();
   setInterval(runAutomaticScheduleSync, RIBBON_SYNC_INTERVAL_MINUTES * 60 * 1000);
 });

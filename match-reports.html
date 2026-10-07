@@ -59,6 +59,25 @@
     .mr-card-actions { margin-top: 6px; text-align: center; font-size: 12px; }
     .mr-card-actions .push-score-btn { padding: 4px 9px; font-size: 11.5px; }
 
+    /* Team kits - tiny kit icon beside team names, and the kits modal. */
+    .mini-kit { display: inline-block; cursor: pointer; vertical-align: middle; margin: 0 5px; line-height: 0; }
+    .mini-kit svg { height: 22px; width: auto; }
+    .kits-link { font-size: 11px; font-weight: 600; color: var(--navy); }
+    .kits-modal { max-width: 760px; }
+    .kits-teams { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    .kits-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .kit-tile { border: 1px solid var(--border); border-radius: 8px; padding: 6px; text-align: center; background: var(--bg); }
+    .kit-tile.expected { border-color: var(--gold); box-shadow: 0 0 0 2px rgba(231,194,71,.45); background: #FFFBEA; }
+    .kit-tile .kit-label { font-size: 10.5px; font-weight: 700; text-transform: uppercase; color: var(--gray); }
+    .kit-visual { height: 84px; display: flex; align-items: center; justify-content: center; }
+    .kit-visual svg { height: 80px; width: auto; }
+    .kit-visual img { max-width: 100%; max-height: 84px; object-fit: contain; border-radius: 4px; }
+    .kit-thumbs { display: flex; gap: 3px; justify-content: center; margin: 3px 0; }
+    .kit-thumbs img { width: 30px; height: 30px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border); cursor: zoom-in; background: #fff; }
+    .kit-colors { font-size: 11px; color: var(--gray); line-height: 1.35; }
+    .kit-colors .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 1px solid rgba(0,0,0,.25); vertical-align: -1px; margin-right: 3px; }
+    @media (max-width: 720px) { .kits-teams { grid-template-columns: 1fr; } }
+
     @media (max-width: 720px) {
       .table-wrap { display: none; }
       .mr-cards { display: block; }
@@ -70,6 +89,7 @@
   USCCS Admin Console — Match Reports
   <span style="display:flex; align-items:center; gap:16px;">
     <a href="/">← Misconduct Review</a>
+    <a href="/kits">Team Kits</a>
     <a href="/oauth/logout">Log out</a>
   </span>
 </header>
@@ -158,6 +178,16 @@
   </div>
 </div>
 
+<div class="box-score-overlay" id="kitsOverlay" onclick="if (event.target === this) closeKitsModal();">
+  <div class="box-score-modal kits-modal">
+    <h3 id="kitsTitle"></h3>
+    <p class="muted" id="kitsSubtitle"></p>
+    <div class="kits-teams" id="kitsBody"></div>
+    <p class="muted" style="margin:12px 0 0;">Highlighted: the kit each team is expected to wear (home team: Home, away team: Away). Kits are set on the <a href="/kits">Team Kits</a> page.</p>
+    <button class="box-score-close" onclick="closeKitsModal()">Close</button>
+  </div>
+</div>
+
 <div class="box-score-overlay" id="forfeitDetailsOverlay" onclick="if (event.target === this) closeForfeitDetailsModal();">
   <div class="box-score-modal">
     <h3 id="forfeitDetailsTitle"></h3>
@@ -168,6 +198,7 @@
 </div>
 <script>
   let selectedDivisionIds = new Set(); // multi-select state for the division filter
+  let kitsByTeam = {}; // team_id -> { home|away|gk_primary|gk_secondary -> {jersey_color, shorts_color, socks_color, image_url} }
   let lastLoadedReports = []; // the most recent server response - "Only show games with a report" filters THIS client-side, no re-fetch
 
   async function loadFilterOptions() {
@@ -310,6 +341,7 @@
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Unknown error');
       lastLoadedReports = data.reports || [];
+      kitsByTeam = data.kits_by_team || {};
       applyReportFilterAndRender();
     } catch (e) {
       box.innerHTML = '<div class="err-box">Failed to load: ' + escapeHtml(e.message) + '</div>';
@@ -579,11 +611,11 @@
             const rowStyle = bg ? ` style="background:${bg};"` : '';
             return `
             <tr${rowStyle}>
-              <td style="font-size:11.5px; white-space:nowrap;">${r.game_id ? `<a href="https://octopus-app-ilp92.ondigitalocean.app/?game=${encodeURIComponent(r.game_id)}" target="_blank" rel="noopener" style="color:var(--navy);">Match Report URL</a>` : '—'}</td>
+              <td style="font-size:11.5px; white-space:nowrap;">${r.game_id ? `<a href="https://octopus-app-ilp92.ondigitalocean.app/?game=${encodeURIComponent(r.game_id)}" target="_blank" rel="noopener" style="color:var(--navy);">Match Report URL</a>` : '—'}<div><a href="#" class="kits-link" onclick="openKitsModal('${escapeJs(r.game_id)}'); return false;">Kits</a></div></td>
               <td>${r.game_date ? new Date(r.game_date).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short' }) + ' ET' : '—'}</td>
               <td>${escapeHtml(r.gender || '')}</td>
               <td>${escapeHtml(r.division_name || '')}</td>
-              <td style="text-align:right;">${escapeHtml(r.team1_name)}</td>
+              <td style="text-align:right;">${escapeHtml(r.team1_name)}${miniKitHtml(r, 1)}</td>
               <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team1_yellow_count, 'yc-count')}</td>
               <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team1_red_count, 'rc-count')}</td>
               <td style="text-align:center; font-weight:700; white-space:nowrap;">
@@ -592,7 +624,7 @@
               </td>
               <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team2_red_count, 'rc-count')}</td>
               <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team2_yellow_count, 'yc-count')}</td>
-              <td>${escapeHtml(r.team2_name)}</td>
+              <td>${miniKitHtml(r, 2)}${escapeHtml(r.team2_name)}</td>
               <td>${actionsHtml(r)}</td>
               <td>${chargeStatusHtml(r)}</td>
             </tr>
@@ -616,13 +648,14 @@
           return `
           <div class="mr-card"${bg ? ` style="background:${bg};"` : ''}>
             <a class="mr-card-report-link" href="${r.game_id ? 'https://octopus-app-ilp92.ondigitalocean.app/?game=' + encodeURIComponent(r.game_id) : '#'}" target="_blank" rel="noopener">${r.game_id ? 'Match Report URL' : '—'}</a>
+            <div class="mr-card-meta" style="margin-top:0;"><a href="#" class="kits-link" onclick="openKitsModal('${escapeJs(r.game_id)}'); return false;">Kits</a></div>
             <div class="mr-card-meta">${r.game_date ? new Date(r.game_date).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short' }) + ' ET' : '—'} · ${escapeHtml(r.gender || '')} · ${escapeHtml(r.division_name || '')}${!r.has_report && !r.is_forfeit && r.se_home_score != null && r.se_away_score != null ? ' · (score from SE/MO)' : ''}</div>
             <div class="mr-card-teams">
-              <div class="mr-card-team">${escapeHtml(r.team1_name)}</div>
+              <div class="mr-card-team">${escapeHtml(r.team1_name)}${miniKitHtml(r, 1)}</div>
               ${!r.is_forfeit ? `<div class="mr-card-cards">${cardCount(r.team1_yellow_count, 'yc-count')}${cardCount(r.team1_red_count, 'rc-count')}</div>` : ''}
               <div class="mr-card-score-inline">${mobileScoreLineHtml(r)}</div>
               ${!r.is_forfeit ? `<div class="mr-card-cards">${cardCount(r.team2_yellow_count, 'yc-count')}${cardCount(r.team2_red_count, 'rc-count')}</div>` : ''}
-              <div class="mr-card-team">${escapeHtml(r.team2_name)}</div>
+              <div class="mr-card-team">${miniKitHtml(r, 2)}${escapeHtml(r.team2_name)}</div>
             </div>
             ${r.incident_report && !r.is_forfeit ? `<div class="mr-card-incident-row"><button class="push-score-btn" onclick="openIncidentReportModal('${escapeJs(r.game_id)}')">View Incident Report</button></div>` : ''}
             <div class="mr-card-actions">${actionsHtml(r, true)}</div>
@@ -706,6 +739,74 @@
     document.getElementById('forfeitDetailsBody').textContent = r.forfeit_notes || 'No additional details provided.';
     document.getElementById('forfeitDetailsOverlay').classList.add('open');
   }
+
+  // ---- Team kits ----------------------------------------------------------
+  const KIT_TYPES = ['home', 'away', 'gk_primary', 'gk_secondary'];
+  const KIT_LABELS = { home: 'Home', away: 'Away', gk_primary: 'GK Primary', gk_secondary: 'GK Secondary' };
+  const KIT_PARTS = [['jersey_color', 'Jersey'], ['shorts_color', 'Shorts'], ['socks_color', 'Socks']];
+  const KIT_PRESET_NAMES = {
+    '#FFFFFF': 'White', '#111111': 'Black', '#808080': 'Gray', '#C0C0C0': 'Silver', '#D32F2F': 'Red', '#800000': 'Maroon',
+    '#F57C00': 'Orange', '#FFD600': 'Yellow', '#D4AF37': 'Gold', '#76FF03': 'Lime / Neon Green', '#2E7D32': 'Green',
+    '#004D25': 'Dark Green', '#00897B': 'Teal', '#4FC3F7': 'Light Blue', '#1E4FD8': 'Royal Blue', '#0B1F4B': 'Navy',
+    '#6A1B9A': 'Purple', '#E91E63': 'Pink', '#6D4C41': 'Brown',
+  };
+  function kitColorName(hex) { return hex ? (KIT_PRESET_NAMES[hex.toUpperCase()] || hex.toUpperCase()) : null; }
+
+  function kitSvg(kit) {
+    kit = kit || {};
+    const part = (hex, d) => hex
+      ? `<path d="${d}" fill="${hex}" stroke="rgba(0,0,0,.35)" stroke-width="1.2" stroke-linejoin="round"/>`
+      : `<path d="${d}" fill="#F4F6FA" stroke="#B8C0CC" stroke-width="1.2" stroke-dasharray="3 2" stroke-linejoin="round"/>`;
+    const jersey = 'M18 4 L26 2 Q32 9 38 2 L46 4 L58 18 L49 27 L45 22 L45 44 L19 44 L19 22 L15 27 L6 18 Z';
+    const shorts = 'M19 46 L45 46 L48 68 L34 68 L32 57 L30 68 L16 68 Z';
+    const sockL = 'M17 71 L28 71 L27 95 Q22 98 17 95 Z';
+    const sockR = 'M36 71 L47 71 L47 95 Q42 98 37 95 Z';
+    return `<svg viewBox="0 0 64 100" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Kit">
+      ${part(kit.jersey_color, jersey)}${part(kit.shorts_color, shorts)}${part(kit.socks_color, sockL)}${part(kit.socks_color, sockR)}</svg>`;
+  }
+
+  // Home team (team 1) is expected in its Home kit, away team (team 2) in its Away kit.
+  function expectedKitType(side) { return side === 1 ? 'home' : 'away'; }
+
+  function miniKitHtml(r, side) {
+    const teamId = side === 1 ? r.team1_id : r.team2_id;
+    const kt = expectedKitType(side);
+    const k = teamId && kitsByTeam[teamId] && kitsByTeam[teamId][kt];
+    if (!k || !(k.jersey_color || k.shorts_color || k.socks_color)) return '';
+    return `<span class="mini-kit" title="${KIT_LABELS[kt]} kit - click for all kits" onclick="openKitsModal('${escapeJs(r.game_id)}')">${kitSvg(k)}</span>`;
+  }
+
+  function kitTileHtml(k, kt, expected) {
+    const thumbs = k ? KIT_PARTS.map(([key, label]) => {
+      const u = k[key.replace('_color', '_image_url')];
+      return u ? `<img src="${escapeHtml(u)}" alt="${label} photo" title="${label} photo" loading="lazy" onclick="window.open('${escapeJs(u)}', '_blank')" />` : '';
+    }).join('') : '';
+    const visual = kitSvg(k);
+    const colors = k ? KIT_PARTS.map(([key, label]) => k[key]
+      ? `<span><span class="dot" style="background:${k[key]};"></span>${label[0]}: ${escapeHtml(kitColorName(k[key]))}</span>`
+      : `<span style="color:#9aa3b0;">${label[0]}: —</span>`).join('<br>') : '<span style="color:#9aa3b0;">Not set</span>';
+    return `<div class="kit-tile${expected ? ' expected' : ''}">
+      <div class="kit-label">${KIT_LABELS[kt]}${expected ? ' · expected' : ''}</div>
+      <div class="kit-visual">${visual}</div>
+      ${thumbs ? `<div class="kit-thumbs">${thumbs}</div>` : ''}
+      <div class="kit-colors">${colors}</div>
+    </div>`;
+  }
+
+  function openKitsModal(gameId) {
+    const r = lastLoadedReports.find(x => x.game_id === gameId);
+    if (!r) return;
+    document.getElementById('kitsTitle').textContent = r.team1_name + ' vs ' + r.team2_name;
+    document.getElementById('kitsSubtitle').textContent = 'Team kits for this game';
+    const col = (name, teamId, side) => {
+      const kits = (teamId && kitsByTeam[teamId]) || {};
+      return `<div><h4 style="font-size:12px; text-transform:uppercase; color:var(--gray); margin:0 0 8px; border-bottom:1px solid var(--border); padding-bottom:6px;">${escapeHtml(name)} ${side === 1 ? '(Home)' : '(Away)'}</h4>
+        <div class="kits-grid">${KIT_TYPES.map(kt => kitTileHtml(kits[kt], kt, kt === expectedKitType(side))).join('')}</div></div>`;
+    };
+    document.getElementById('kitsBody').innerHTML = col(r.team1_name, r.team1_id, 1) + col(r.team2_name, r.team2_id, 2);
+    document.getElementById('kitsOverlay').classList.add('open');
+  }
+  function closeKitsModal() { document.getElementById('kitsOverlay').classList.remove('open'); }
 
   function closeForfeitDetailsModal() {
     document.getElementById('forfeitDetailsOverlay').classList.remove('open');
