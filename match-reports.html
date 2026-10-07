@@ -63,10 +63,26 @@
     .mini-kit { display: inline-block; cursor: pointer; vertical-align: middle; margin: 0 5px; line-height: 0; }
     .mini-kit svg { height: 22px; width: auto; }
     .kits-link { font-size: 11px; font-weight: 600; color: var(--navy); }
-    .kits-modal { max-width: 760px; }
+    .kits-modal { max-width: 860px; }
     .kits-teams { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
     .kits-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
     .kit-tile { border: 1px solid var(--border); border-radius: 8px; padding: 6px; text-align: center; background: var(--bg); }
+    .kit-section { margin-top: 10px; }
+    .kit-section-head { display: flex; justify-content: space-between; font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--gray); margin-bottom: 4px; }
+    .kit-section-head a { text-transform: none; font-weight: 600; color: var(--navy); }
+    .kit-section-body { display: flex; gap: 8px; align-items: flex-start; }
+    .kit-preview { width: 52px; flex-shrink: 0; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 4px; }
+    .kit-preview svg { width: 100%; height: auto; display: block; }
+    .kit-parts { flex: 1; min-width: 0; }
+    .part-row { display: grid; grid-template-columns: 46px 1fr 1fr; gap: 5px; align-items: stretch; margin-bottom: 5px; }
+    .part-row-label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--gray); display: flex; align-items: center; }
+    .part-opt { display: flex; gap: 6px; align-items: center; border: 1px solid var(--border); border-radius: 8px; padding: 4px 6px; background: var(--bg); cursor: pointer; min-width: 0; }
+    .part-opt:hover { border-color: var(--navy); }
+    .part-opt.sel { border-color: var(--gold); box-shadow: 0 0 0 2px rgba(231,194,71,.45); background: #FFFBEA; }
+    .part-opt img, .part-swatch { width: 34px; height: 34px; border-radius: 6px; flex-shrink: 0; object-fit: cover; border: 1px solid rgba(0,0,0,.25); display: block; }
+    .part-swatch.none { background: repeating-linear-gradient(45deg, #fff, #fff 4px, #E1E5EC 4px, #E1E5EC 8px); }
+    .part-opt-txt { font-size: 10.5px; line-height: 1.3; color: var(--gray); min-width: 0; }
+    .part-opt-txt b { color: #1a1a1a; font-size: 11px; }
     .kit-tile.pickable { cursor: pointer; }
     .kit-tile.pickable:hover { border-color: var(--navy); }
     .kit-tile.expected { border-color: var(--gold); box-shadow: 0 0 0 2px rgba(231,194,71,.45); background: #FFFBEA; }
@@ -185,7 +201,7 @@
     <h3 id="kitsTitle"></h3>
     <p class="muted" id="kitsSubtitle"></p>
     <div class="kits-teams" id="kitsBody"></div>
-    <p class="muted" style="margin:12px 0 0;">Highlighted tiles show what each team wears. Defaults: home team in Home, away team in Away, goalkeepers in GK Primary. Colors and photos are managed on the <a href="/kits">Team Kits</a> page.</p>
+    <p class="muted" style="margin:12px 0 0;">Highlighted options show what each team wears. Defaults: home team in Home, away team in Away, goalkeepers in GK Primary. The kit drawing shows the mixed result. Colors and photos are managed on the <a href="/kits">Team Kits</a> page.</p>
     <div style="display:flex; align-items:center; gap:12px; margin-top:12px;">
       <button class="box-score-close" style="margin-top:0;" id="kitsSaveBtn" onclick="saveKitAssignments()">Save for this game</button>
       <button class="box-score-close" style="margin-top:0; background:#fff; color:var(--navy); border:1px solid var(--border);" onclick="closeKitsModal()">Close</button>
@@ -773,78 +789,110 @@
       ${part(kit.jersey_color, jersey)}${part(kit.shorts_color, shorts)}${part(kit.socks_color, sockL)}${part(kit.socks_color, sockR)}</svg>`;
   }
 
-  // Default (nothing assigned): home team (team 1) in its Home kit, away team (team 2) in its Away kit.
+  // ---- Per-game kit choices, mix-and-match by part -------------------------
+  // For each team, each of Jersey / Shorts / Socks is chosen separately for the
+  // outfield kit (Home or Away) and the goalkeeper kit (GK Primary or GK
+  // Secondary). Nothing chosen = default: home team Home, away team Away,
+  // goalkeepers GK Primary.
+  const PART_KEYS = ['jersey', 'shorts', 'socks'];
+  const PART_LABELS = { jersey: 'Jersey', shorts: 'Shorts', socks: 'Socks' };
+  const DEFAULT_GK_KIT = 'gk_primary';
+  const GROUPS = {
+    out: { title: 'Outfield kit', types: ['home', 'away'] },
+    gk: { title: 'Goalkeeper kit', types: ['gk_primary', 'gk_secondary'] },
+  };
   function defaultOutfieldKit(side) { return side === 1 ? 'home' : 'away'; }
+  function defaultKitFor(side, group) { return group === 'out' ? defaultOutfieldKit(side) : DEFAULT_GK_KIT; }
   function teamIdFor(r, side) { return side === 1 ? r.team1_id : r.team2_id; }
   function assignmentFor(r, side) {
     return ((kitAssignments[r.game_id] || {})[teamIdFor(r, side)]) || {};
   }
-  function outfieldKitFor(r, side) { return assignmentFor(r, side).outfield_kit || defaultOutfieldKit(side); }
+  // kit type a given part currently comes from. valueOf(group, part) = explicit choice or ''.
+  function effectiveKit(side, group, part, explicit) { return explicit || defaultKitFor(side, group); }
+  // Jersey/shorts/socks colors of the mixed kit, picked part by part.
+  function mixedKitColors(kits, side, group, explicitOf) {
+    const out = {};
+    PART_KEYS.forEach(part => {
+      const kt = effectiveKit(side, group, part, explicitOf(part));
+      out[part + '_color'] = (kits[kt] || {})[part + '_color'] || null;
+    });
+    return out;
+  }
 
   function miniKitHtml(r, side) {
     const teamId = teamIdFor(r, side);
-    const kt = outfieldKitFor(r, side);
-    const k = teamId && kitsByTeam[teamId] && kitsByTeam[teamId][kt];
-    if (!k || !(k.jersey_color || k.shorts_color || k.socks_color)) return '';
-    return `<span class="mini-kit" title="${KIT_LABELS[kt]} kit - click for all kits" onclick="openKitsModal('${escapeJs(r.game_id)}')">${kitSvg(k)}</span>`;
+    const kits = (teamId && kitsByTeam[teamId]) || {};
+    const a = assignmentFor(r, side);
+    const colors = mixedKitColors(kits, side, 'out', part => a['out_' + part]);
+    if (!(colors.jersey_color || colors.shorts_color || colors.socks_color)) return '';
+    return `<span class="mini-kit" title="Outfield kit as worn - click for all kits" onclick="openKitsModal('${escapeJs(r.game_id)}')">${kitSvg(colors)}</span>`;
   }
 
-  // note: '' | 'expected' | 'wearing' | 'GK' - small tag shown on the highlighted tile.
-  function kitTileHtml(k, kt, note, onclick) {
-    const thumbs = k ? KIT_PARTS.map(([key, label]) => {
-      const u = k[key.replace('_color', '_image_url')];
-      return u ? `<img src="${escapeHtml(u)}" alt="${label} photo" title="${label} photo" loading="lazy" onclick="event.stopPropagation(); window.open('${escapeJs(u)}', '_blank')" />` : '';
-    }).join('') : '';
-    const visual = kitSvg(k);
-    const colors = k ? KIT_PARTS.map(([key, label]) => k[key]
-      ? `<span><span class="dot" style="background:${k[key]};"></span>${label[0]}: ${escapeHtml(kitColorName(k[key]))}</span>`
-      : `<span style="color:#9aa3b0;">${label[0]}: —</span>`).join('<br>') : '<span style="color:#9aa3b0;">Not set</span>';
-    return `<div class="kit-tile${note ? ' expected' : ''}${onclick ? ' pickable' : ''}"${onclick ? ` onclick="${onclick}"` : ''}>
-      <div class="kit-label">${KIT_LABELS[kt]}${note ? ' · ' + note : ''}</div>
-      <div class="kit-visual">${visual}</div>
-      ${thumbs ? `<div class="kit-thumbs">${thumbs}</div>` : ''}
-      <div class="kit-colors">${colors}</div>
+  // One selectable option (e.g. "Home jersey"): the part's photo if there is one, else a color swatch.
+  function partOptionHtml(kits, kt, part, selected, explicit, onclick) {
+    const k = kits[kt] || {};
+    const color = k[part + '_color'];
+    const img = k[part + '_image_url'];
+    const visual = img
+      ? `<img src="${escapeHtml(img)}" alt="" loading="lazy" />`
+      : `<span class="part-swatch${color ? '' : ' none'}" style="${color ? 'background:' + color : ''}"></span>`;
+    return `<div class="part-opt${selected ? ' sel' : ''}" onclick="${onclick}">
+      ${visual}
+      <div class="part-opt-txt"><b>${KIT_LABELS[kt]}</b><br>${color ? escapeHtml(kitColorName(color)) : '<span style="color:#9aa3b0;">not set</span>'}${selected && !explicit ? '<br><i>default</i>' : ''}</div>
     </div>`;
   }
 
-  // Draft of the admin's picks while the modal is open: { gameId, 1: {out, gk}, 2: {out, gk} }
-  // out = 'home'|'away'|'' (blank = default for that side)
-  // gk  = 'gk_primary'|'gk_secondary'|'' (blank = default, GK Primary)
+  // Draft of the admin's picks while the modal is open:
+  // { gameId, 1: { out_jersey, ..., gk_socks }, 2: { ... } } - '' = default.
   let kitDraft = null;
-  const DEFAULT_GK_KIT = 'gk_primary';
 
   function renderKitsModal() {
     const r = lastLoadedReports.find(x => x.game_id === kitDraft.gameId);
     if (!r) return;
     document.getElementById('kitsTitle').textContent = r.team1_name + ' vs ' + r.team2_name;
-    document.getElementById('kitsSubtitle').textContent = 'Click a kit to choose what each team wears in this game';
-    const sub = (txt) => `<div style="font-size:11px; font-weight:700; text-transform:uppercase; color:var(--gray); margin:10px 0 4px;">${txt}</div>`;
+    document.getElementById('kitsSubtitle').textContent = 'Choose the jersey, shorts and socks each team wears. Mix and match as needed.';
     const col = (name, side) => {
       const kits = (teamIdFor(r, side) && kitsByTeam[teamIdFor(r, side)]) || {};
       const d = kitDraft[side];
-      const effOut = d.out || defaultOutfieldKit(side);
-      const effGk = d.gk || DEFAULT_GK_KIT;
-      const tile = (kt, group, effective, explicit) => kitTileHtml(
-        kits[kt], kt, kt === effective ? (explicit ? 'selected' : 'default') : '', `pickKit(${side}, '${group}', '${kt}')`);
-      const custom = d.out || d.gk;
-      return `<div><h4 style="font-size:12px; text-transform:uppercase; color:var(--gray); margin:0; border-bottom:1px solid var(--border); padding-bottom:6px; display:flex; justify-content:space-between;">
+      const custom = Object.values(d).some(v => v);
+      const section = (group) => {
+        const g = GROUPS[group];
+        const colors = mixedKitColors(kits, side, group, part => d[group + '_' + part]);
+        const rows = PART_KEYS.map(part => {
+          const explicit = d[group + '_' + part];
+          const eff = effectiveKit(side, group, part, explicit);
+          return `<div class="part-row"><div class="part-row-label">${PART_LABELS[part]}</div>
+            ${g.types.map(kt => partOptionHtml(kits, kt, part, kt === eff, explicit, `pickKitPart(${side}, '${group}', '${part}', '${kt}')`)).join('')}</div>`;
+        }).join('');
+        return `<div class="kit-section">
+          <div class="kit-section-head"><span>${g.title}</span>
+            <span>${g.types.map(kt => `<a href="#" onclick="setKitGroup(${side}, '${group}', '${kt}'); return false;">All ${KIT_LABELS[kt]}</a>`).join(' · ')}</span></div>
+          <div class="kit-section-body"><div class="kit-preview">${kitSvg(colors)}</div><div class="kit-parts">${rows}</div></div>
+        </div>`;
+      };
+      return `<div><h4 style="font-size:12px; text-transform:uppercase; color:var(--gray); margin:0 0 4px; border-bottom:1px solid var(--border); padding-bottom:6px; display:flex; justify-content:space-between;">
           <span>${escapeHtml(name)} ${side === 1 ? '(Home)' : '(Away)'}</span>
           ${custom ? `<a href="#" style="font-weight:600; text-transform:none; color:var(--navy);" onclick="resetKitSide(${side}); return false;">Reset to default</a>` : ''}
-        </h4>
-        ${sub('Outfield kit')}
-        <div class="kits-grid">${tile('home', 'out', effOut, d.out)}${tile('away', 'out', effOut, d.out)}</div>
-        ${sub('Goalkeeper kit')}
-        <div class="kits-grid">${tile('gk_primary', 'gk', effGk, d.gk)}${tile('gk_secondary', 'gk', effGk, d.gk)}</div></div>`;
+        </h4>${section('out')}${section('gk')}</div>`;
     };
     document.getElementById('kitsBody').innerHTML = col(r.team1_name, 1) + col(r.team2_name, 2);
   }
 
-  function pickKit(side, group, kitType) {
-    kitDraft[side][group === 'out' ? 'out' : 'gk'] = kitType;
+  function pickKitPart(side, group, part, kitType) {
+    kitDraft[side][group + '_' + part] = kitType;
     renderKitsModal();
   }
+  function setKitGroup(side, group, kitType) {
+    PART_KEYS.forEach(part => { kitDraft[side][group + '_' + part] = kitType; });
+    renderKitsModal();
+  }
+  function emptyKitChoice() {
+    const o = {};
+    ['out', 'gk'].forEach(g => PART_KEYS.forEach(p => { o[g + '_' + p] = ''; }));
+    return o;
+  }
   function resetKitSide(side) {
-    kitDraft[side] = { out: '', gk: '' };
+    kitDraft[side] = emptyKitChoice();
     renderKitsModal();
   }
 
@@ -854,7 +902,8 @@
     kitDraft = { gameId };
     [1, 2].forEach(side => {
       const a = assignmentFor(r, side);
-      kitDraft[side] = { out: a.outfield_kit || '', gk: a.gk_kit || '' };
+      kitDraft[side] = emptyKitChoice();
+      Object.keys(kitDraft[side]).forEach(k => { kitDraft[side][k] = a[k] || ''; });
     });
     document.getElementById('kitsStatus').textContent = '';
     renderKitsModal();
@@ -865,9 +914,11 @@
     const r = lastLoadedReports.find(x => x.game_id === kitDraft.gameId);
     const status = document.getElementById('kitsStatus');
     const btn = document.getElementById('kitsSaveBtn');
-    const assignments = [1, 2].filter(side => teamIdFor(r, side)).map(side => ({
-      team_id: teamIdFor(r, side), outfield_kit: kitDraft[side].out || null, gk_kit: kitDraft[side].gk || null,
-    }));
+    const assignments = [1, 2].filter(side => teamIdFor(r, side)).map(side => {
+      const a = { team_id: teamIdFor(r, side) };
+      Object.keys(kitDraft[side]).forEach(k => { a[k] = kitDraft[side][k] || null; });
+      return a;
+    });
     btn.disabled = true; status.textContent = 'Saving…'; status.style.color = '';
     try {
       const resp = await fetch(`/api/match-reports/${encodeURIComponent(r.game_id)}/kit-assignments`, {
@@ -877,8 +928,9 @@
       if (!resp.ok) throw new Error(data.error || 'Save failed');
       kitAssignments[r.game_id] = kitAssignments[r.game_id] || {};
       assignments.forEach(a => {
-        if (a.outfield_kit == null && a.gk_kit == null) delete kitAssignments[r.game_id][a.team_id];
-        else kitAssignments[r.game_id][a.team_id] = { outfield_kit: a.outfield_kit, gk_kit: a.gk_kit };
+        const { team_id, ...choice } = a;
+        if (Object.values(choice).every(v => v == null)) delete kitAssignments[r.game_id][team_id];
+        else kitAssignments[r.game_id][team_id] = choice;
       });
       applyReportFilterAndRender(); // refresh the small kit icons in the table
       status.textContent = 'Saved.'; status.style.color = 'var(--ok, #1E7A46)';

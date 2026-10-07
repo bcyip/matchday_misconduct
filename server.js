@@ -696,22 +696,48 @@ async function ensureTeamKitsTable() {
   }
 }
 
-// Which kits each team wears in a specific game, set by an admin from the
-// Match Reports "Kits" window. Unset = default (home team in Home, away team
-// in Away, GK not chosen).
+// Which kit each PART (jersey / shorts / socks) of each team wears in a
+// specific game, set by an admin from the Match Reports "Kits" window - so a
+// team can wear its Home jersey with Away socks, a GK can wear the Primary
+// jersey with Secondary shorts, etc. A NULL part = default (home team: Home,
+// away team: Away, goalkeepers: GK Primary).
+const OUT_KIT_VALUES = ['home', 'away'];
+const GK_KIT_VALUES = ['gk_primary', 'gk_secondary'];
+const ASSIGNMENT_FIELDS = [
+  ['out_jersey', OUT_KIT_VALUES], ['out_shorts', OUT_KIT_VALUES], ['out_socks', OUT_KIT_VALUES],
+  ['gk_jersey', GK_KIT_VALUES], ['gk_shorts', GK_KIT_VALUES], ['gk_socks', GK_KIT_VALUES],
+];
 async function ensureGameKitAssignmentsTable() {
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS game_kit_assignments (
         game_id TEXT NOT NULL,
         team_id TEXT NOT NULL,
-        outfield_kit TEXT CHECK (outfield_kit IN ('home','away')),
-        gk_kit TEXT CHECK (gk_kit IN ('gk_primary','gk_secondary')),
+        outfield_kit TEXT,
+        gk_kit TEXT,
         set_by TEXT,
         set_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         PRIMARY KEY (game_id, team_id)
       )
     `);
+    await pool.query(`
+      ALTER TABLE game_kit_assignments
+        ADD COLUMN IF NOT EXISTS out_jersey TEXT, ADD COLUMN IF NOT EXISTS out_shorts TEXT, ADD COLUMN IF NOT EXISTS out_socks TEXT,
+        ADD COLUMN IF NOT EXISTS gk_jersey TEXT, ADD COLUMN IF NOT EXISTS gk_shorts TEXT, ADD COLUMN IF NOT EXISTS gk_socks TEXT
+    `);
+    // One-time carry-over from the earlier whole-kit version (outfield_kit /
+    // gk_kit): applies the old single choice to all three parts, then the old
+    // columns are never written again (see the POST handler).
+    await pool.query(`
+      UPDATE game_kit_assignments SET out_jersey = outfield_kit, out_shorts = outfield_kit, out_socks = outfield_kit
+      WHERE outfield_kit IS NOT NULL AND out_jersey IS NULL AND out_shorts IS NULL AND out_socks IS NULL
+    `);
+    await pool.query(`
+      UPDATE game_kit_assignments SET gk_jersey = gk_kit, gk_shorts = gk_kit, gk_socks = gk_kit
+      WHERE gk_kit IS NOT NULL AND gk_jersey IS NULL AND gk_shorts IS NULL AND gk_socks IS NULL
+    `);
+    await pool.query(`ALTER TABLE game_kit_assignments DROP CONSTRAINT IF EXISTS game_kit_assignments_outfield_kit_check`);
+    await pool.query(`ALTER TABLE game_kit_assignments DROP CONSTRAINT IF EXISTS game_kit_assignments_gk_kit_check`);
   } catch (err) {
     console.error('[kits] Could not ensure game_kit_assignments table exists:', err.message);
   }
@@ -1204,9 +1230,12 @@ const server = http.createServer(async (req, res) => {
       try {
         const gameIds = reports.map(r => r.game_id).filter(Boolean);
         if (gameIds.length) {
-          const aResult = await pool.query('SELECT game_id, team_id, outfield_kit, gk_kit FROM game_kit_assignments WHERE game_id = ANY($1)', [gameIds]);
+          const aResult = await pool.query('SELECT game_id, team_id, out_jersey, out_shorts, out_socks, gk_jersey, gk_shorts, gk_socks FROM game_kit_assignments WHERE game_id = ANY($1)', [gameIds]);
           for (const a of aResult.rows) {
-            (kitAssignments[a.game_id] = kitAssignments[a.game_id] || {})[a.team_id] = { outfield_kit: a.outfield_kit, gk_kit: a.gk_kit };
+            (kitAssignments[a.game_id] = kitAssignments[a.game_id] || {})[a.team_id] = {
+              out_jersey: a.out_jersey, out_shorts: a.out_shorts, out_socks: a.out_socks,
+              gk_jersey: a.gk_jersey, gk_shorts: a.gk_shorts, gk_socks: a.gk_socks,
+            };
           }
         }
       } catch (aErr) {
@@ -1929,10 +1958,12 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // POST /api/match-reports/:gameId/kit-assignments - set which kits each
-  // team wears in this game. Body: { assignments: [{ team_id, outfield_kit,
-  // gk_kit }] } where outfield_kit is 'home'|'away'|null and gk_kit is
-  // 'gk_primary'|'gk_secondary'|null. Both null clears that team's choice.
+  // POST /api/match-reports/:gameId/kit-assignments - set which kit each PART
+  // of each team's outfield and goalkeeper kit comes from, for this game.
+  // Body: { assignments: [{ team_id, out_jersey, out_shorts, out_socks,
+  // gk_jersey, gk_shorts, gk_socks }] } - out_* are 'home'|'away'|null,
+  // gk_* are 'gk_primary'|'gk_secondary'|null (null = default). All six null
+  // clears that team's choices for the game.
   const kitAssignMatch = url.pathname.match(/^\/api\/match-reports\/([^/]+)\/kit-assignments$/);
   if (req.method === 'POST' && kitAssignMatch) {
     const session = await getSession(cookies.admin_session);
@@ -1945,21 +1976,28 @@ const server = http.createServer(async (req, res) => {
       const payload = await readJsonBody(req, 20 * 1024);
       const list = Array.isArray(payload.assignments) ? payload.assignments : [];
       for (const a of list) {
-        if (!a || typeof a.team_id !== 'string' || !a.team_id
-          || !(a.outfield_kit == null || ['home', 'away'].includes(a.outfield_kit))
-          || !(a.gk_kit == null || ['gk_primary', 'gk_secondary'].includes(a.gk_kit))) {
+        const ok = a && typeof a.team_id === 'string' && a.team_id
+          && ASSIGNMENT_FIELDS.every(([f, allowed]) => a[f] == null || allowed.includes(a[f]));
+        if (!ok) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ error: 'Invalid kit assignment.' }));
         }
       }
       for (const a of list) {
-        if (a.outfield_kit == null && a.gk_kit == null) {
+        const vals = ASSIGNMENT_FIELDS.map(([f]) => a[f] || null);
+        if (vals.every(v => v == null)) {
           await pool.query('DELETE FROM game_kit_assignments WHERE game_id = $1 AND team_id = $2', [gameId, a.team_id]);
         } else {
+          // outfield_kit / gk_kit (legacy whole-kit columns) are explicitly nulled
+          // so the one-time carry-over at startup can never resurrect old values.
           await pool.query(
-            `INSERT INTO game_kit_assignments (game_id, team_id, outfield_kit, gk_kit, set_by) VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (game_id, team_id) DO UPDATE SET outfield_kit = EXCLUDED.outfield_kit, gk_kit = EXCLUDED.gk_kit, set_by = EXCLUDED.set_by, set_at = now()`,
-            [gameId, a.team_id, a.outfield_kit || null, a.gk_kit || null, session.name || null]
+            `INSERT INTO game_kit_assignments (game_id, team_id, out_jersey, out_shorts, out_socks, gk_jersey, gk_shorts, gk_socks, outfield_kit, gk_kit, set_by)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, NULL, $9)
+             ON CONFLICT (game_id, team_id) DO UPDATE SET
+               out_jersey = EXCLUDED.out_jersey, out_shorts = EXCLUDED.out_shorts, out_socks = EXCLUDED.out_socks,
+               gk_jersey = EXCLUDED.gk_jersey, gk_shorts = EXCLUDED.gk_shorts, gk_socks = EXCLUDED.gk_socks,
+               outfield_kit = NULL, gk_kit = NULL, set_by = EXCLUDED.set_by, set_at = now()`,
+            [gameId, a.team_id, ...vals, session.name || null]
           );
         }
       }
