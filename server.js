@@ -696,6 +696,27 @@ async function ensureTeamKitsTable() {
   }
 }
 
+// Which kits each team wears in a specific game, set by an admin from the
+// Match Reports "Kits" window. Unset = default (home team in Home, away team
+// in Away, GK not chosen).
+async function ensureGameKitAssignmentsTable() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS game_kit_assignments (
+        game_id TEXT NOT NULL,
+        team_id TEXT NOT NULL,
+        outfield_kit TEXT CHECK (outfield_kit IN ('home','away')),
+        gk_kit TEXT CHECK (gk_kit IN ('gk_primary','gk_secondary')),
+        set_by TEXT,
+        set_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (game_id, team_id)
+      )
+    `);
+  } catch (err) {
+    console.error('[kits] Could not ensure game_kit_assignments table exists:', err.message);
+  }
+}
+
 // Full team list for the Kits page. Prefers division_team_list.json (every
 // team in the league, even ones with no games cached yet) when it is deployed
 // next to this file; always merged with teams seen in schedule_games_cache.
@@ -1178,8 +1199,21 @@ const server = http.createServer(async (req, res) => {
       } catch (kitErr) {
         console.error('[api/match-reports] Could not load kits (continuing without):', kitErr.message);
       }
+      // Per-game kit choices (admin-set), keyed game_id -> team_id -> choice.
+      let kitAssignments = {};
+      try {
+        const gameIds = reports.map(r => r.game_id).filter(Boolean);
+        if (gameIds.length) {
+          const aResult = await pool.query('SELECT game_id, team_id, outfield_kit, gk_kit FROM game_kit_assignments WHERE game_id = ANY($1)', [gameIds]);
+          for (const a of aResult.rows) {
+            (kitAssignments[a.game_id] = kitAssignments[a.game_id] || {})[a.team_id] = { outfield_kit: a.outfield_kit, gk_kit: a.gk_kit };
+          }
+        }
+      } catch (aErr) {
+        console.error('[api/match-reports] Could not load kit assignments (continuing without):', aErr.message);
+      }
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ reports, kits_by_team: kitsByTeam }));
+      res.end(JSON.stringify({ reports, kits_by_team: kitsByTeam, kit_assignments: kitAssignments }));
     } catch (err) {
       console.error('[api/match-reports] Error:', err.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -1895,6 +1929,50 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // POST /api/match-reports/:gameId/kit-assignments - set which kits each
+  // team wears in this game. Body: { assignments: [{ team_id, outfield_kit,
+  // gk_kit }] } where outfield_kit is 'home'|'away'|null and gk_kit is
+  // 'gk_primary'|'gk_secondary'|null. Both null clears that team's choice.
+  const kitAssignMatch = url.pathname.match(/^\/api\/match-reports\/([^/]+)\/kit-assignments$/);
+  if (req.method === 'POST' && kitAssignMatch) {
+    const session = await getSession(cookies.admin_session);
+    if (!session) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Not logged in' }));
+    }
+    const gameId = decodeURIComponent(kitAssignMatch[1]);
+    try {
+      const payload = await readJsonBody(req, 20 * 1024);
+      const list = Array.isArray(payload.assignments) ? payload.assignments : [];
+      for (const a of list) {
+        if (!a || typeof a.team_id !== 'string' || !a.team_id
+          || !(a.outfield_kit == null || ['home', 'away'].includes(a.outfield_kit))
+          || !(a.gk_kit == null || ['gk_primary', 'gk_secondary'].includes(a.gk_kit))) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'Invalid kit assignment.' }));
+        }
+      }
+      for (const a of list) {
+        if (a.outfield_kit == null && a.gk_kit == null) {
+          await pool.query('DELETE FROM game_kit_assignments WHERE game_id = $1 AND team_id = $2', [gameId, a.team_id]);
+        } else {
+          await pool.query(
+            `INSERT INTO game_kit_assignments (game_id, team_id, outfield_kit, gk_kit, set_by) VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (game_id, team_id) DO UPDATE SET outfield_kit = EXCLUDED.outfield_kit, gk_kit = EXCLUDED.gk_kit, set_by = EXCLUDED.set_by, set_at = now()`,
+            [gameId, a.team_id, a.outfield_kit || null, a.gk_kit || null, session.name || null]
+          );
+        }
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true }));
+    } catch (err) {
+      console.error('[api/match-reports kit-assignments] Error:', err.message);
+      res.writeHead(err.statusCode || 500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
   // GET /kits - the all-team kits page. Same auth gate as the other pages.
   if (req.method === 'GET' && url.pathname === '/kits') {
     const session = await getSession(cookies.admin_session);
@@ -1978,6 +2056,7 @@ server.listen(PORT, async () => {
   await ensureLogoColumns();
   await ensureSeManualEntryTable();
   await ensureTeamKitsTable();
+  await ensureGameKitAssignmentsTable();
   loadKitTeamListFile();
   runAutomaticScheduleSync();
   setInterval(runAutomaticScheduleSync, RIBBON_SYNC_INTERVAL_MINUTES * 60 * 1000);

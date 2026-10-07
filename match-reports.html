@@ -183,8 +183,12 @@
     <h3 id="kitsTitle"></h3>
     <p class="muted" id="kitsSubtitle"></p>
     <div class="kits-teams" id="kitsBody"></div>
-    <p class="muted" style="margin:12px 0 0;">Highlighted: the kit each team is expected to wear (home team: Home, away team: Away). Kits are set on the <a href="/kits">Team Kits</a> page.</p>
-    <button class="box-score-close" onclick="closeKitsModal()">Close</button>
+    <p class="muted" style="margin:12px 0 0;">Highlighted tiles show what each team wears. Leave Outfield on Default for home team in Home, away team in Away. Colors and photos are managed on the <a href="/kits">Team Kits</a> page.</p>
+    <div style="display:flex; align-items:center; gap:12px; margin-top:12px;">
+      <button class="box-score-close" style="margin-top:0;" id="kitsSaveBtn" onclick="saveKitAssignments()">Save for this game</button>
+      <button class="box-score-close" style="margin-top:0; background:#fff; color:var(--navy); border:1px solid var(--border);" onclick="closeKitsModal()">Close</button>
+      <span id="kitsStatus" style="font-size:13px;"></span>
+    </div>
   </div>
 </div>
 
@@ -198,6 +202,7 @@
 </div>
 <script>
   let selectedDivisionIds = new Set(); // multi-select state for the division filter
+  let kitAssignments = {}; // game_id -> team_id -> { outfield_kit, gk_kit } (admin-set per game)
   let kitsByTeam = {}; // team_id -> { home|away|gk_primary|gk_secondary -> {jersey_color, shorts_color, socks_color, image_url} }
   let lastLoadedReports = []; // the most recent server response - "Only show games with a report" filters THIS client-side, no re-fetch
 
@@ -342,6 +347,7 @@
       if (!res.ok) throw new Error(data.error || 'Unknown error');
       lastLoadedReports = data.reports || [];
       kitsByTeam = data.kits_by_team || {};
+      kitAssignments = data.kit_assignments || {};
       applyReportFilterAndRender();
     } catch (e) {
       box.innerHTML = '<div class="err-box">Failed to load: ' + escapeHtml(e.message) + '</div>';
@@ -765,18 +771,24 @@
       ${part(kit.jersey_color, jersey)}${part(kit.shorts_color, shorts)}${part(kit.socks_color, sockL)}${part(kit.socks_color, sockR)}</svg>`;
   }
 
-  // Home team (team 1) is expected in its Home kit, away team (team 2) in its Away kit.
-  function expectedKitType(side) { return side === 1 ? 'home' : 'away'; }
+  // Default (nothing assigned): home team (team 1) in its Home kit, away team (team 2) in its Away kit.
+  function defaultOutfieldKit(side) { return side === 1 ? 'home' : 'away'; }
+  function teamIdFor(r, side) { return side === 1 ? r.team1_id : r.team2_id; }
+  function assignmentFor(r, side) {
+    return ((kitAssignments[r.game_id] || {})[teamIdFor(r, side)]) || {};
+  }
+  function outfieldKitFor(r, side) { return assignmentFor(r, side).outfield_kit || defaultOutfieldKit(side); }
 
   function miniKitHtml(r, side) {
-    const teamId = side === 1 ? r.team1_id : r.team2_id;
-    const kt = expectedKitType(side);
+    const teamId = teamIdFor(r, side);
+    const kt = outfieldKitFor(r, side);
     const k = teamId && kitsByTeam[teamId] && kitsByTeam[teamId][kt];
     if (!k || !(k.jersey_color || k.shorts_color || k.socks_color)) return '';
     return `<span class="mini-kit" title="${KIT_LABELS[kt]} kit - click for all kits" onclick="openKitsModal('${escapeJs(r.game_id)}')">${kitSvg(k)}</span>`;
   }
 
-  function kitTileHtml(k, kt, expected) {
+  // note: '' | 'expected' | 'wearing' | 'GK' - small tag shown on the highlighted tile.
+  function kitTileHtml(k, kt, note) {
     const thumbs = k ? KIT_PARTS.map(([key, label]) => {
       const u = k[key.replace('_color', '_image_url')];
       return u ? `<img src="${escapeHtml(u)}" alt="${label} photo" title="${label} photo" loading="lazy" onclick="window.open('${escapeJs(u)}', '_blank')" />` : '';
@@ -785,26 +797,90 @@
     const colors = k ? KIT_PARTS.map(([key, label]) => k[key]
       ? `<span><span class="dot" style="background:${k[key]};"></span>${label[0]}: ${escapeHtml(kitColorName(k[key]))}</span>`
       : `<span style="color:#9aa3b0;">${label[0]}: —</span>`).join('<br>') : '<span style="color:#9aa3b0;">Not set</span>';
-    return `<div class="kit-tile${expected ? ' expected' : ''}">
-      <div class="kit-label">${KIT_LABELS[kt]}${expected ? ' · expected' : ''}</div>
+    return `<div class="kit-tile${note ? ' expected' : ''}">
+      <div class="kit-label">${KIT_LABELS[kt]}${note ? ' · ' + note : ''}</div>
       <div class="kit-visual">${visual}</div>
       ${thumbs ? `<div class="kit-thumbs">${thumbs}</div>` : ''}
       <div class="kit-colors">${colors}</div>
     </div>`;
   }
 
+  // Draft of the admin's picks while the modal is open: { gameId, 1: {out, gk}, 2: {out, gk} }
+  // out = 'home'|'away'|'' (blank = default), gk = 'gk_primary'|'gk_secondary'|'' (blank = not chosen).
+  let kitDraft = null;
+
+  function renderKitsModal() {
+    const r = lastLoadedReports.find(x => x.game_id === kitDraft.gameId);
+    if (!r) return;
+    document.getElementById('kitsTitle').textContent = r.team1_name + ' vs ' + r.team2_name;
+    document.getElementById('kitsSubtitle').textContent = 'Choose which kits each team wears in this game';
+    const col = (name, side) => {
+      const kits = (teamIdFor(r, side) && kitsByTeam[teamIdFor(r, side)]) || {};
+      const d = kitDraft[side];
+      const effOut = d.out || defaultOutfieldKit(side);
+      const sel = (id, value, opts) => `<select id="${id}" onchange="onKitDraftChange()" style="padding:6px 8px; border:1px solid var(--border); border-radius:6px; font-size:13px; width:100%;">
+        ${opts.map(([v, l]) => `<option value="${v}" ${v === value ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+      return `<div><h4 style="font-size:12px; text-transform:uppercase; color:var(--gray); margin:0 0 8px; border-bottom:1px solid var(--border); padding-bottom:6px;">${escapeHtml(name)} ${side === 1 ? '(Home)' : '(Away)'}</h4>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px;">
+          <label style="font-size:11px; font-weight:700; text-transform:uppercase; color:var(--gray);">Outfield kit
+            ${sel('kitOut_' + side, d.out, [['', 'Default (' + KIT_LABELS[defaultOutfieldKit(side)] + ')'], ['home', 'Home'], ['away', 'Away']])}</label>
+          <label style="font-size:11px; font-weight:700; text-transform:uppercase; color:var(--gray);">GK kit
+            ${sel('kitGk_' + side, d.gk, [['', 'Not chosen'], ['gk_primary', 'GK Primary'], ['gk_secondary', 'GK Secondary']])}</label>
+        </div>
+        <div class="kits-grid">${KIT_TYPES.map(kt => {
+          let note = '';
+          if (kt === effOut) note = d.out ? 'wearing' : 'default';
+          if (kt === d.gk) note = 'GK';
+          return kitTileHtml(kits[kt], kt, note);
+        }).join('')}</div></div>`;
+    };
+    document.getElementById('kitsBody').innerHTML = col(r.team1_name, 1) + col(r.team2_name, 2);
+  }
+
+  function onKitDraftChange() {
+    [1, 2].forEach(side => {
+      kitDraft[side] = { out: document.getElementById('kitOut_' + side).value, gk: document.getElementById('kitGk_' + side).value };
+    });
+    renderKitsModal();
+  }
+
   function openKitsModal(gameId) {
     const r = lastLoadedReports.find(x => x.game_id === gameId);
     if (!r) return;
-    document.getElementById('kitsTitle').textContent = r.team1_name + ' vs ' + r.team2_name;
-    document.getElementById('kitsSubtitle').textContent = 'Team kits for this game';
-    const col = (name, teamId, side) => {
-      const kits = (teamId && kitsByTeam[teamId]) || {};
-      return `<div><h4 style="font-size:12px; text-transform:uppercase; color:var(--gray); margin:0 0 8px; border-bottom:1px solid var(--border); padding-bottom:6px;">${escapeHtml(name)} ${side === 1 ? '(Home)' : '(Away)'}</h4>
-        <div class="kits-grid">${KIT_TYPES.map(kt => kitTileHtml(kits[kt], kt, kt === expectedKitType(side))).join('')}</div></div>`;
-    };
-    document.getElementById('kitsBody').innerHTML = col(r.team1_name, r.team1_id, 1) + col(r.team2_name, r.team2_id, 2);
+    kitDraft = { gameId };
+    [1, 2].forEach(side => {
+      const a = assignmentFor(r, side);
+      kitDraft[side] = { out: a.outfield_kit || '', gk: a.gk_kit || '' };
+    });
+    document.getElementById('kitsStatus').textContent = '';
+    renderKitsModal();
     document.getElementById('kitsOverlay').classList.add('open');
+  }
+
+  async function saveKitAssignments() {
+    const r = lastLoadedReports.find(x => x.game_id === kitDraft.gameId);
+    const status = document.getElementById('kitsStatus');
+    const btn = document.getElementById('kitsSaveBtn');
+    const assignments = [1, 2].filter(side => teamIdFor(r, side)).map(side => ({
+      team_id: teamIdFor(r, side), outfield_kit: kitDraft[side].out || null, gk_kit: kitDraft[side].gk || null,
+    }));
+    btn.disabled = true; status.textContent = 'Saving…'; status.style.color = '';
+    try {
+      const resp = await fetch(`/api/match-reports/${encodeURIComponent(r.game_id)}/kit-assignments`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ assignments }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'Save failed');
+      kitAssignments[r.game_id] = kitAssignments[r.game_id] || {};
+      assignments.forEach(a => {
+        if (a.outfield_kit == null && a.gk_kit == null) delete kitAssignments[r.game_id][a.team_id];
+        else kitAssignments[r.game_id][a.team_id] = { outfield_kit: a.outfield_kit, gk_kit: a.gk_kit };
+      });
+      applyReportFilterAndRender(); // refresh the small kit icons in the table
+      status.textContent = 'Saved.'; status.style.color = 'var(--ok, #1E7A46)';
+    } catch (e) {
+      status.textContent = e.message; status.style.color = 'var(--danger)';
+    } finally { btn.disabled = false; }
   }
   function closeKitsModal() { document.getElementById('kitsOverlay').classList.remove('open'); }
 
