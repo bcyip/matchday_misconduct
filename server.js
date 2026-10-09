@@ -82,6 +82,10 @@ const RIBBON_SYNC_INTERVAL_MINUTES = parseFloat(process.env.RIBBON_SYNC_INTERVAL
 // matches the match-ribbon app's own 7-day display window (6 + today), so
 // its cache stays fully covered even right at a sync boundary.
 const RIBBON_SYNC_DAYS_BACK = 6;
+// How many days AHEAD of today the automatic sync also pulls, so the score
+// ribbon can show the next few days' scheduled games. These future rows are
+// never shown in Match Reports (it caps at the end of today).
+const RIBBON_SYNC_DAYS_FORWARD = 3;
 
 const SESSION_LIFETIME_MS = 8 * 60 * 60 * 1000; // 8 hours
 
@@ -552,6 +556,13 @@ function getEndOfTodayEastern(now) {
   return getEasternDayBounds(easternDateStr).end;
 }
 
+// End of the Eastern calendar day that is `daysAhead` days after today.
+function getEndOfDayEasternPlus(now, daysAhead) {
+  const [y, m, d] = now.toLocaleDateString('en-CA', { timeZone: 'America/New_York' }).split('-').map(Number);
+  const target = new Date(Date.UTC(y, m - 1, d + daysAhead, 12, 0, 0)); // pure calendar arithmetic, DST-safe
+  return getEasternDayBounds(target.toISOString().slice(0, 10)).end;
+}
+
 async function fetchGamesInRange(from, to) {
   let allEvents = [];
   let page = 1;
@@ -591,8 +602,9 @@ async function fetchGamesInRange(from, to) {
 // Called by the automatic background timer (see runAutomaticScheduleSync /
 // server.listen) - fetches the given range from SportsEngine and upserts into
 // schedule_games_cache (including the team logo columns).
-// Never syncs past the end of today (Eastern), regardless of what range is
-// passed in - this cache is for history that's already happened.
+// Never syncs past the end of day (today + RIBBON_SYNC_DAYS_FORWARD) Eastern,
+// regardless of what range is passed in. The few forward days exist only so
+// the score ribbon can show upcoming scheduled games.
 //
 // NOTE: this used to also auto-flag "MO report received" whenever
 // SportsEngine already had a score for a game with no real USCCS report yet.
@@ -603,11 +615,11 @@ async function fetchGamesInRange(from, to) {
 // standalone "SE manual score entry" flag, which is also set manually by an
 // admin (see the flag-se-manual-entry endpoint below).
 async function runScheduleSyncForRange(rangeFrom, rangeTo) {
-  const endOfTodayEastern = getEndOfTodayEastern(new Date());
-  const effectiveRangeTo = rangeTo < endOfTodayEastern ? rangeTo : endOfTodayEastern;
+  const syncHorizon = getEndOfDayEasternPlus(new Date(), RIBBON_SYNC_DAYS_FORWARD);
+  const effectiveRangeTo = rangeTo < syncHorizon ? rangeTo : syncHorizon;
 
   const games = await fetchGamesInRange(rangeFrom.toISOString(), effectiveRangeTo.toISOString());
-  const pastGames = games.filter(g => g.startTime && new Date(g.startTime) <= endOfTodayEastern);
+  const pastGames = games.filter(g => g.startTime && new Date(g.startTime) <= syncHorizon);
 
   let syncedCount = 0;
   for (const g of pastGames) {
@@ -631,15 +643,15 @@ async function runScheduleSyncForRange(rangeFrom, rangeTo) {
 
 // The automatic background sync moved here from the standalone match-ribbon
 // app (see header comment) - runs on a timer, off any request path, pulling
-// RIBBON_SYNC_DAYS_BACK + 1 days of buffer through the end of today
-// (Eastern), same window shape the ribbon app used to sync for itself.
+// RIBBON_SYNC_DAYS_BACK + 1 days of buffer through RIBBON_SYNC_DAYS_FORWARD
+// days past today (Eastern), same window shape the ribbon app used to sync for itself.
 async function runAutomaticScheduleSync() {
   const startedAt = Date.now();
   try {
     const now = new Date();
-    const endOfTodayEastern = getEndOfTodayEastern(now);
+    const syncHorizon = getEndOfDayEasternPlus(now, RIBBON_SYNC_DAYS_FORWARD);
     const rangeFrom = new Date(now.getTime() - (RIBBON_SYNC_DAYS_BACK + 1) * 24 * 60 * 60 * 1000);
-    const result = await runScheduleSyncForRange(rangeFrom, endOfTodayEastern);
+    const result = await runScheduleSyncForRange(rangeFrom, syncHorizon);
     console.log(`[schedule-sync] Automatic sync: ${result.syncedCount} games synced, in ${Date.now() - startedAt}ms.`);
   } catch (err) {
     // Never let a failed automatic sync crash the server or block the next
