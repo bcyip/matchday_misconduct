@@ -402,7 +402,14 @@
   // Plain "3 - 1" text (no markup) - shared by the table's Score cell and
   // the mobile card's centered score line.
   function scoreText(r) {
-    if (r.is_forfeit) return reasonLabelFor(r);
+    if (r.is_forfeit) {
+      // Only a FORFEIT shows a score (ours, else SportsEngine's), with the label
+      // below it. Abandoned and Postponed games show just their label - no score.
+      if (r.forfeit_reason !== 'forfeit') return reasonLabelFor(r);
+      if (r.team1_score != null && r.team2_score != null) return r.team1_score + ' - ' + r.team2_score;
+      if (r.se_home_score != null && r.se_away_score != null) return r.se_home_score + ' - ' + r.se_away_score;
+      return '—';
+    }
     if (r.has_report) return r.team1_score + ' - ' + r.team2_score;
     if (r.se_home_score != null && r.se_away_score != null) return r.se_home_score + ' - ' + r.se_away_score;
     return '—';
@@ -414,9 +421,15 @@
   // 3. A SportsEngine/MO score (from the sync) or "SE manual score entry"
   //    checked - just the score gets a yellow highlight, row stays red.
   // 4. Otherwise plain (row is already red).
+  // Small reason label (Forfeit / Postponed / Abandoned) shown below a forfeit game's score.
+  function forfeitLabelHtml(r) {
+    return `<div class="muted" style="font-weight:700; font-size:10.5px; text-transform:uppercase; letter-spacing:.03em; margin-top:2px;">${escapeHtml(reasonLabelFor(r) || 'Forfeit')}</div>`;
+  }
+
   function scoreCellHtml(r) {
     const text = escapeHtml(scoreText(r));
-    if (r.is_forfeit || r.has_report || r.flagged_external) return text;
+    if (r.is_forfeit) return r.forfeit_reason === 'forfeit' ? text + forfeitLabelHtml(r) : text;
+    if (r.has_report || r.flagged_external) return text;
     if (r.se_home_score != null && r.se_away_score != null) {
       return `<span style="background:#FFF6D6; padding:2px 6px; border-radius:4px;">${text}</span><div class="muted" style="font-weight:400; font-size:10px; margin-top:2px;">(from SE/MO)</div>`;
     }
@@ -465,7 +478,8 @@
       // A real report is the truth - plain/white regardless of either flag.
       return `${escapeHtml(String(r.team1_score))} <a href="#" onclick="openBoxScore('${escapeJs(r.game_id)}'); return false;" style="color:var(--navy); text-decoration:underline;">Box Score</a> ${escapeHtml(String(r.team2_score))}`;
     }
-    if (r.is_forfeit || r.flagged_external) return escapeHtml(scoreText(r));
+    if (r.is_forfeit) return escapeHtml(scoreText(r)) + (r.forfeit_reason === 'forfeit' ? forfeitLabelHtml(r) : '');
+    if (r.flagged_external) return escapeHtml(scoreText(r));
     if (r.se_home_score != null && r.se_away_score != null) {
       return `<span style="background:#FFF6D6; padding:2px 6px; border-radius:4px;">${escapeHtml(scoreText(r))}</span><div class="muted" style="font-weight:400; font-size:10px; margin-top:2px;">(from SE/MO)</div>`;
     }
