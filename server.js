@@ -99,19 +99,19 @@ const DIVISION_LOOKUP = {
   '6a4439745407815052443199': { name: 'AL/MS', gender: 'Men', conference: 'East' },
   '6a4439745407813fac44341f': { name: 'Baltimore', gender: 'Men', conference: 'East' },
   '6a0c980026aee381f43b3ef0': { name: 'Big Sky', gender: 'Men', conference: 'West' },
-  '6a4e96e416115e0153c5de9d': { name: 'Crossroads', gender: 'Men' }, // conference unknown - not in the provided mapping, ask if this needs a conference
+  '6a4e96e416115e0153c5de9d': { name: 'Crossroads', gender: 'Men', conference: 'Central' }, // assigned by admin
   '6a44397409f291d00804fde8': { name: 'Florida North', gender: 'Men', conference: 'East' },
   '6a4439744e42a26275c7ff31': { name: 'Florida South', gender: 'Men', conference: 'East' },
   '6a443974b5457c8f19bccbfc': { name: 'Georgia', gender: 'Men', conference: 'East' },
-  '6a4e96e4c7769d01229fb5c6': { name: 'Great Lakes', gender: 'Men' }, // conference unknown
-  '6a4e96e47d61ac00f01ad8b8': { name: 'Great Lakes II', gender: 'Men' }, // conference unknown
+  '6a4e96e4c7769d01229fb5c6': { name: 'Great Lakes', gender: 'Men', conference: 'Central' }, // assigned by admin
+  '6a4e96e47d61ac00f01ad8b8': { name: 'Great Lakes II', gender: 'Men', conference: 'Central' }, // assigned by admin
   '6a4e96e4801326012116f744': { name: 'Great Plains', gender: 'Men', conference: 'Central' }, // Midwest -> Central per instruction
-  '6a4e96e46b8d1e00ef1ee690': { name: 'Heartland', gender: 'Men' }, // conference unknown
-  '6a4e96e416115e0122c5e2c1': { name: 'Heartland II', gender: 'Men' }, // conference unknown
+  '6a4e96e46b8d1e00ef1ee690': { name: 'Heartland', gender: 'Men', conference: 'Central' }, // assigned by admin
+  '6a4e96e416115e0122c5e2c1': { name: 'Heartland II', gender: 'Men', conference: 'Central' }, // assigned by admin
   '6a44397409f291e60904fdda': { name: 'Hudson Valley', gender: 'Men', conference: 'East' },
   '6a443974b5457c54e4bcd12d': { name: 'KY/TN', gender: 'Men', conference: 'East' },
   '6a0cb110cdb76433cc151485': { name: 'Midwest North', gender: 'Men', conference: 'Central' }, // Midwest -> Central per instruction
-  '6a0e070026aee3f6e43b446f': { name: 'Midwest North II', gender: 'Men' }, // conference unknown - not in the provided mapping
+  '6a0e070026aee3f6e43b446f': { name: 'Midwest North II', gender: 'Men', conference: 'Central' }, // assigned by admin
   '6a0e0700cdb76416601513ae': { name: 'Midwest South', gender: 'Men', conference: 'Central' }, // Midwest -> Central per instruction
   '6a4e96e46b8d1e01201ee2ce': { name: 'Ozark', gender: 'Men' }, // conference unknown
   '6a44397409f29192050500f1': { name: 'NC East', gender: 'Men', conference: 'East' },
@@ -121,18 +121,18 @@ const DIVISION_LOOKUP = {
   '6a44397454078160b344310a': { name: 'New England South', gender: 'Men', conference: 'East' },
   '6a0c980026aee362b23b3f0e': { name: 'NorCal', gender: 'Men', conference: 'West' },
   '6a0c980004d6b0c7a8af73bd': { name: 'NorCal II', gender: 'Men', conference: 'West' },
-  '6a0c980098c2fde79e7c20e8': { name: 'Northwest', gender: 'Men' }, // conference unknown (only listed for Women)
-  '6a0e08bbf841cfba91996998': { name: 'Northwoods', gender: 'Men' }, // conference unknown
-  '6a0e09e298c2fd5b067c22c4': { name: 'Northwoods II', gender: 'Men' }, // conference unknown
+  '6a0c980098c2fde79e7c20e8': { name: 'Northwest', gender: 'Men', conference: 'West' }, // same conference as Northwest Women
+  '6a0e08bbf841cfba91996998': { name: 'Northwoods', gender: 'Men', conference: 'Central' }, // assigned by admin
+  '6a0e09e298c2fd5b067c22c4': { name: 'Northwoods II', gender: 'Men', conference: 'Central' }, // assigned by admin
   '6a4439744e42a24ee3c80243': { name: 'NYC', gender: 'Men', conference: 'East' },
   '6a443974b5457c6597bccdad': { name: 'Philly', gender: 'Men', conference: 'East' },
-  '6a0e08bb61444a4db0f2ef89': { name: 'Prairie', gender: 'Men' }, // conference unknown
-  '6a4e96e48dabb800efcfbce9': { name: 'Red River', gender: 'Men' }, // conference unknown
-  '6a4e96e48dabb80151cfb8bd': { name: 'Red River II', gender: 'Men' }, // conference unknown
+  '6a0e08bb61444a4db0f2ef89': { name: 'Prairie', gender: 'Men', conference: 'Central' }, // assigned by admin
+  '6a4e96e48dabb800efcfbce9': { name: 'Red River', gender: 'Men', conference: 'Central' }, // assigned by admin
+  '6a4e96e48dabb80151cfb8bd': { name: 'Red River II', gender: 'Men', conference: 'Central' }, // assigned by admin
   '6a4e96e4c7769d00f19fb81b': { name: 'Rocky Mountain', gender: 'Men', conference: 'Central' },
   '6a4e96e435cc6d00ef70bd6d': { name: 'Rocky Mountain II', gender: 'Men', conference: 'Central' },
-  '6a4e96e4c7769d00bc9fbb3f': { name: 'Sabine River', gender: 'Men' }, // conference unknown
-  '6a4e96e48dabb80120cfb96d': { name: 'Sabine River II', gender: 'Men' }, // conference unknown
+  '6a4e96e4c7769d00bc9fbb3f': { name: 'Sabine River', gender: 'Men', conference: 'Central' }, // assigned by admin
+  '6a4e96e48dabb80120cfb96d': { name: 'Sabine River II', gender: 'Men', conference: 'Central' }, // assigned by admin
   '6a0c980026aee3a5643b3edf': { name: 'SoCal', gender: 'Men', conference: 'West' },
   '6a0c980098c2fd32fc7c1d07': { name: 'SoCal II', gender: 'Men', conference: 'West' },
   '6a3ed52cf2a55d01e50c59e5': { name: 'SoCal III', gender: 'Men', conference: 'West' },
