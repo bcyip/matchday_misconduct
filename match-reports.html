@@ -96,6 +96,15 @@
     .kit-colors .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 1px solid rgba(0,0,0,.25); vertical-align: -1px; margin-right: 3px; }
     @media (max-width: 720px) { .kits-teams { grid-template-columns: 1fr; } }
 
+    /* Tournament mode filter bar (day / gender / division tier buttons). */
+    .tbar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+    .tbar-label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--gray); width: 62px; flex-shrink: 0; }
+    .seg { display: flex; flex-wrap: wrap; gap: 6px; }
+    .seg button { padding: 8px 14px; border: 1px solid var(--border); background: #fff; color: var(--navy); border-radius: 8px; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+    .seg button:hover { border-color: var(--navy); }
+    .seg button.on { background: var(--navy); color: #fff; border-color: var(--navy); }
+    .seg button small { display: block; font-size: 10.5px; font-weight: 400; opacity: .8; }
+
     @media (max-width: 720px) {
       .table-wrap { display: none; }
       .mr-cards { display: block; }
@@ -104,16 +113,22 @@
 </head>
 <body>
 <header>
-  USCCS Admin Console — Match Reports
+  <span id="pageTitle">USCCS Admin Console — Match Reports</span>
   <span style="display:flex; align-items:center; gap:16px;">
     <a href="/">← Misconduct Review</a>
     <a href="/kits">Team Kits</a>
+    <a href="/tournament" id="tournamentNavLink" style="display:none;">Tournament Setup</a>
     <a href="/oauth/logout">Log out</a>
   </span>
 </header>
 <main>
   <div class="card">
-    <div class="filters">
+    <div id="tournamentBar" style="display:none; margin-bottom:6px;">
+      <div class="tbar-row"><span class="tbar-label">Day</span><div class="seg" id="tDayButtons"></div></div>
+      <div class="tbar-row"><span class="tbar-label">Gender</span><div class="seg" id="tGenderButtons"></div></div>
+      <div class="tbar-row"><span class="tbar-label">Division</span><div class="seg" id="tTierButtons"></div></div>
+    </div>
+    <div class="filters" id="seasonFilterRow">
       <div class="field">
         <label for="conferenceFilter">Conference</label>
         <select id="conferenceFilter" multiple size="4" onchange="onConferenceFilterChange()" style="min-width:110px; padding:6px; border:1px solid var(--border); border-radius:6px; font-size:13px;">
@@ -147,12 +162,11 @@
         <select id="reportStatusFilter" onchange="applyReportFilterAndRender()">
           <option value="all">All Games</option>
           <option value="has_report">USCCS Report</option>
-          <option value="mo_report_only">MO Report Reviewed</option>
           <option value="no_report_registered">No USCCS Report</option>
         </select>
       </div>
     </div>
-    <div class="filters" style="margin-top:14px;">
+    <div class="filters" id="seasonDateRow" style="margin-top:14px;">
       <div class="field">
         <label for="dateFrom">From</label>
         <input type="date" id="dateFrom"  />
@@ -308,35 +322,114 @@
   // Purely client-side - filters the already-loaded data, no re-fetch.
   function applyReportFilterAndRender() {
     const status = document.getElementById('reportStatusFilter').value;
-    let filtered = lastLoadedReports;
-    if (status === 'has_report') filtered = lastLoadedReports.filter(r => r.has_report);
-    // "MO report reviewed" is a purely manual, admin-entered flag - never
-    // auto-set from a SportsEngine score (see runScheduleSyncForRange
-    // server-side). It's independent of has_report, so in principle both
-    // could be true at once; the has_report check here is kept as a safety
-    // net so a flagged game that later gets a real report submitted moves
-    // out of this filter rather than double-counting.
-    else if (status === 'mo_report_only') filtered = lastLoadedReports.filter(r => r.flagged_external && !r.has_report);
-    else if (status === 'no_report_registered') filtered = lastLoadedReports.filter(r => !r.has_report && !r.flagged_external);
-    renderSummaryStats();
+    // Tournament mode narrows the loaded set by the day / gender / tier
+    // buttons first; everything below (and the summary counts) then works on
+    // that narrowed set.
+    const baseRows = TOURNAMENT ? tournamentFilteredRows() : lastLoadedReports;
+    let filtered = baseRows;
+    if (status === 'has_report') filtered = baseRows.filter(r => r.has_report);
+    else if (status === 'upcoming') filtered = baseRows.filter(r => isUpcoming(r));
+    // The "MO report reviewed" flag (flagged_external) is no longer shown or
+    // editable in the UI; it is still stored in the db and returned by the API.
+    else if (status === 'no_report_registered') filtered = baseRows.filter(r => !r.has_report && !isUpcoming(r));
+    renderSummaryStats(baseRows);
     renderReports(filtered);
+  }
+
+  // A game that hasn't kicked off yet and has no report - shown as "Upcoming"
+  // instead of "No USCCS Report" (only really happens in tournament mode,
+  // where future games are listed too).
+  function isUpcoming(r) {
+    return !r.has_report && !!r.game_date && new Date(r.game_date).getTime() > Date.now();
+  }
+
+  // ---- Tournament mode (window.TOURNAMENT_CONFIG is set by the server) -----
+  const TOURNAMENT = window.TOURNAMENT_CONFIG || null;
+  const tSel = { day: 'all', gender: '', tier: '' };
+
+  function easternDateOf(iso) {
+    if (!iso) return null;
+    return new Date(iso).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  }
+
+  function tournamentFilteredRows() {
+    let rows = lastLoadedReports;
+    if (tSel.day !== 'all') rows = rows.filter(r => easternDateOf(r.game_date) === tSel.day);
+    if (tSel.gender) rows = rows.filter(r => r.gender === tSel.gender);
+    if (tSel.tier) rows = rows.filter(r => (r.tier || 'Unassigned') === tSel.tier);
+    return rows;
+  }
+
+  function setTournamentFilter(kind, value) {
+    tSel[kind] = value;
+    // Women have Gold and Silver only; drop a Bronze selection if it no longer applies.
+    if (tSel.gender === 'Women' && tSel.tier === 'Bronze') tSel.tier = '';
+    renderTournamentBar();
+    applyReportFilterAndRender();
+  }
+
+  function renderTournamentBar() {
+    if (!TOURNAMENT) return;
+    const seg = (items, kind, current) => items.map(it =>
+      `<button type="button" class="${current === it.value ? 'on' : ''}" onclick="setTournamentFilter('${kind}', '${it.value}')">${it.html}</button>`).join('');
+    const dayItems = [{ value: 'all', html: 'All Days' }].concat(TOURNAMENT.days.map(d => ({
+      value: d.date, html: `${escapeHtml(d.label)}<small>${escapeHtml(d.date.slice(5).replace('-', '/'))}</small>`,
+    })));
+    document.getElementById('tDayButtons').innerHTML = seg(dayItems, 'day', tSel.day);
+    document.getElementById('tGenderButtons').innerHTML = seg([
+      { value: '', html: 'All' }, { value: 'Men', html: 'Men' }, { value: 'Women', html: 'Women' },
+    ], 'gender', tSel.gender);
+    // Men: Gold / Silver / Bronze. Women: Gold / Silver. "Unassigned" only
+    // appears if some loaded game's division has no tier yet.
+    const tiers = tSel.gender === 'Women' ? TOURNAMENT.tiers.Women : TOURNAMENT.tiers.Men;
+    const tierItems = [{ value: '', html: 'All' }].concat(tiers.map(t => ({ value: t, html: t })));
+    if (lastLoadedReports.some(r => !r.tier)) tierItems.push({ value: 'Unassigned', html: 'Unassigned' });
+    document.getElementById('tTierButtons').innerHTML = seg(tierItems, 'tier', tSel.tier);
+  }
+
+  function initTournamentUi() {
+    if (!TOURNAMENT) return;
+    document.getElementById('pageTitle').textContent = TOURNAMENT.name + ' — Match Reports';
+    document.title = TOURNAMENT.name + ' — Match Reports';
+    document.getElementById('tournamentNavLink').style.display = '';
+    document.getElementById('tournamentBar').style.display = '';
+    // The season filters (conference, division, team, gender dropdown, dates)
+    // don't apply here - the day / gender / division buttons replace them.
+    document.getElementById('seasonDateRow').style.display = 'none';
+    ['conferenceFilter', 'divisionFilterBtn', 'teamFilter', 'genderFilter'].forEach(id => {
+      document.getElementById(id).closest('.field').style.display = 'none';
+    });
+    const showSel = document.getElementById('reportStatusFilter');
+    showSel.insertAdjacentHTML('beforeend', '<option value="upcoming">Upcoming</option>');
+    // Start on today's tournament day if it is one, otherwise the first day.
+    const today = easternDateOf(new Date().toISOString());
+    tSel.day = TOURNAMENT.days.some(d => d.date === today) ? today : (TOURNAMENT.days[0] ? TOURNAMENT.days[0].date : 'all');
+    renderTournamentBar();
+    // Live scoring: refresh every 2 minutes, skipping the refresh while a
+    // popup is open so it is never pulled out from under someone.
+    setInterval(() => {
+      if (document.querySelector('.box-score-overlay.open')) return;
+      loadReports();
+    }, 120000);
   }
 
   // Summary counts are always over the FULL loaded set, regardless of
   // which filter is currently applied - so the numbers stay stable as a
   // reference point while browsing different filtered views.
-  // These three counts partition the full set exactly - every game is
-  // USCCS report, MO report, or no report, never more than one - so they
-  // always add up to totalGames.
-  function renderSummaryStats() {
-    const totalGames = lastLoadedReports.length;
-    const usccsReport = lastLoadedReports.filter(r => r.has_report).length;
-    const moReport = lastLoadedReports.filter(r => r.flagged_external && !r.has_report).length;
-    const noReport = lastLoadedReports.filter(r => !r.has_report && !r.flagged_external).length;
+  // The two counts partition the full set exactly, so they always add up
+  // to totalGames.
+  function renderSummaryStats(rows) {
+    rows = rows || lastLoadedReports;
+    const totalGames = rows.length;
+    const usccsReport = rows.filter(r => r.has_report).length;
+    const upcoming = rows.filter(r => isUpcoming(r)).length;
+    const noReport = rows.filter(r => !r.has_report && !isUpcoming(r)).length;
+    // "Upcoming" only exists as a separate count in tournament mode (the
+    // season view never lists future games), so the season line is unchanged.
     document.getElementById('summaryStats').innerHTML = `
       <strong>${totalGames}</strong> total games &nbsp;·&nbsp;
       <strong>${usccsReport}</strong> USCCS report &nbsp;·&nbsp;
-      <strong>${moReport}</strong> MO report reviewed &nbsp;·&nbsp;
+      ${TOURNAMENT ? `<strong>${upcoming}</strong> upcoming &nbsp;·&nbsp;` : ''}
       <strong>${noReport}</strong> no USCCS report
     `;
   }
@@ -366,6 +459,7 @@
       lastLoadedReports = data.reports || [];
       kitsByTeam = data.kits_by_team || {};
       kitAssignments = data.kit_assignments || {};
+      renderTournamentBar();
       applyReportFilterAndRender();
     } catch (e) {
       box.innerHTML = '<div class="err-box">Failed to load: ' + escapeHtml(e.message) + '</div>';
@@ -391,7 +485,7 @@
   function rowBgColor(r) {
     if (r.is_forfeit) return '#F4F6FA';
     if (r.has_report) return null;
-    if (r.flagged_external) return '#FDF0DD';
+    if (isUpcoming(r)) return '#F4F6FA'; // not played yet - neutral, not "missing"
     return '#FBEAE8';
   }
 
@@ -429,7 +523,7 @@
   function scoreCellHtml(r) {
     const text = escapeHtml(scoreText(r));
     if (r.is_forfeit) return r.forfeit_reason === 'forfeit' ? text + forfeitLabelHtml(r) : text;
-    if (r.has_report || r.flagged_external) return text;
+    if (r.has_report) return text;
     if (r.se_home_score != null && r.se_away_score != null) {
       return `<span style="background:#FFF6D6; padding:2px 6px; border-radius:4px;">${text}</span><div class="muted" style="font-weight:400; font-size:10px; margin-top:2px;">(from SE/MO)</div>`;
     }
@@ -479,7 +573,6 @@
       return `${escapeHtml(String(r.team1_score))} <a href="#" onclick="openBoxScore('${escapeJs(r.game_id)}'); return false;" style="color:var(--navy); text-decoration:underline;">Box Score</a> ${escapeHtml(String(r.team2_score))}`;
     }
     if (r.is_forfeit) return escapeHtml(scoreText(r)) + (r.forfeit_reason === 'forfeit' ? forfeitLabelHtml(r) : '');
-    if (r.flagged_external) return escapeHtml(scoreText(r));
     if (r.se_home_score != null && r.se_away_score != null) {
       return `<span style="background:#FFF6D6; padding:2px 6px; border-radius:4px;">${escapeHtml(scoreText(r))}</span><div class="muted" style="font-weight:400; font-size:10px; margin-top:2px;">(from SE/MO)</div>`;
     }
@@ -586,12 +679,7 @@
     if (compact) {
       return `
         <div style="display:flex; align-items:center; justify-content:center; gap:6px; flex-wrap:wrap;">
-          <span class="muted">No USCCS Report</span>
-          <span class="muted">|</span>
-          <label style="display:flex; align-items:center; gap:4px; font-weight:400; cursor:pointer;">
-            <input type="checkbox" ${r.flagged_external ? 'checked' : ''} onchange="toggleExternalFlag('${escapeJs(r.game_id)}', this.checked)" />
-            MO report reviewed
-          </label>
+          <span class="muted">${isUpcoming(r) ? 'Upcoming' : 'No USCCS Report'}</span>
           <span class="muted">|</span>
           <label style="display:flex; align-items:center; gap:4px; font-weight:400; cursor:pointer;">
             <input type="checkbox" ${r.se_manual_entry ? 'checked' : ''} onchange="toggleSeManualEntryFlag('${escapeJs(r.game_id)}', this.checked)" />
@@ -609,12 +697,8 @@
       `;
     }
     return `
-      <span class="muted" style="font-size:12px; display:block;">No USCCS Report</span>
+      <span class="muted" style="font-size:12px; display:block;">${isUpcoming(r) ? 'Upcoming' : 'No USCCS Report'}</span>
       ${previousForfeitNoteHtml(r)}
-      <label style="display:flex; align-items:center; gap:5px; font-size:11.5px; font-weight:400; margin-top:4px; cursor:pointer;">
-        <input type="checkbox" ${r.flagged_external ? 'checked' : ''} onchange="toggleExternalFlag('${escapeJs(r.game_id)}', this.checked)" />
-        MO report reviewed
-      </label>
       <label style="display:flex; align-items:center; gap:5px; font-size:11.5px; font-weight:400; margin-top:4px; cursor:pointer;">
         <input type="checkbox" ${r.se_manual_entry ? 'checked' : ''} onchange="toggleSeManualEntryFlag('${escapeJs(r.game_id)}', this.checked)" />
         SE manual score entry
@@ -1082,7 +1166,8 @@
     return String(str == null ? '' : str).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
   }
 
-  loadFilterOptions();
+  initTournamentUi();
+  if (!TOURNAMENT) loadFilterOptions();
   loadReports();
 </script>
 </body>

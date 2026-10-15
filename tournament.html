@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tournament Setup</title>
+  <style>
+    :root { --navy: #11213F; --gold: #E7C247; --bg: #F4F6FA; --border: #E1E5EC; --gray: #5A6472; --danger: #C0392B; --ok: #1E7D4F; }
+    body { font-family: -apple-system, sans-serif; background: var(--bg); margin: 0; color: #1a1a1a; }
+    header { background: var(--navy); color: var(--gold); padding: 14px 20px; font-weight: 700; font-size: 17px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+    header a { color: #6BC4E8; text-decoration: none; font-size: 13px; font-weight: 600; }
+    main { max-width: 1100px; margin: 0 auto; padding: 24px 16px; }
+    .card { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 18px; }
+    h2 { margin: 0 0 4px; font-size: 16px; color: var(--navy); }
+    h3 { margin: 18px 0 6px; font-size: 13px; text-transform: uppercase; color: var(--gray); letter-spacing: .03em; }
+    .muted { color: var(--gray); font-size: 13px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th { text-align: left; font-size: 11px; text-transform: uppercase; color: var(--gray); padding: 8px; border-bottom: 2px solid var(--border); white-space: nowrap; }
+    td { padding: 8px; border-bottom: 1px solid var(--border); font-size: 13.5px; vertical-align: middle; }
+    select, input[type=text], input[type=number] { padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; font-size: 13.5px; font-family: inherit; }
+    input[type=number] { width: 70px; }
+    button { padding: 7px 14px; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--navy); font-size: 13px; font-weight: 600; cursor: pointer; }
+    button.primary { background: var(--navy); color: #fff; border-color: var(--navy); }
+    button.danger { color: var(--danger); }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .form-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-top: 10px; }
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    .field label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--gray); }
+    .msg { font-size: 13px; margin-top: 8px; min-height: 18px; }
+    .msg.err { color: var(--danger); }
+    .msg.ok { color: var(--ok); }
+    .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11.5px; font-weight: 700; background: var(--bg); }
+    .table-scroll { overflow-x: auto; }
+  </style>
+</head>
+<body>
+<header>
+  <span id="pageTitle">Tournament Setup</span>
+  <span style="display:flex; align-items:center; gap:16px;">
+    <a href="/">Misconduct Review</a>
+    <a href="/match-reports">Match Reports</a>
+    <a href="/kits">Team Kits</a>
+    <a href="/oauth/logout">Log out</a>
+  </span>
+</header>
+<main>
+
+  <div class="card">
+    <h2>1. Division tiers</h2>
+    <p class="muted" style="margin:0;">Every division with a game on the tournament dates appears here as soon as its games are scheduled in SportsEngine. Pick each one's tier (Men: Gold / Silver / Bronze, Women: Gold / Silver). Use <b>Not in tournament</b> for any other division that happens to play on these dates, and it will be hidden everywhere. Divisions left unassigned still show, under "Unassigned".</p>
+    <div class="table-scroll"><div id="divisionsBox"><p class="muted">Loading...</p></div></div>
+    <div class="msg" id="divisionsMsg"></div>
+  </div>
+
+  <div class="card">
+    <h2>2. Suspensions rolling over from the season</h2>
+    <p class="muted" style="margin:0;">Players listed here are flagged as suspended in Matchday and blocked from check-in for their team's tournament games. Each tournament game played (a submitted match report) counts one game served, the same as during the season.</p>
+
+    <h3>Currently entered</h3>
+    <div class="table-scroll"><div id="suspensionsBox"><p class="muted">Loading...</p></div></div>
+
+    <h3>Suspensions still open from the season</h3>
+    <p class="muted" style="margin:0;">Matched to the same school's tournament team by name and gender. Check the games remaining, then add.</p>
+    <div class="table-scroll"><div id="candidatesBox"><p class="muted">Loading...</p></div></div>
+
+    <h3>Add one manually</h3>
+    <div class="form-row">
+      <div class="field">
+        <label for="mTeam">Tournament team</label>
+        <select id="mTeam" onchange="onManualTeamChange()" style="min-width:230px;"><option value="">Select a team...</option></select>
+      </div>
+      <div class="field">
+        <label for="mPerson">Player / staff (from the SportsEngine roster)</label>
+        <select id="mPerson" style="min-width:260px;" disabled><option value="">Select a team first</option></select>
+      </div>
+    </div>
+    <div class="form-row" id="mTypedRow" style="display:none;">
+      <div class="field"><label for="mName">Name</label><input type="text" id="mName" placeholder="Player name" /></div>
+      <div class="field"><label for="mProfile">SportsEngine profile ID</label><input type="text" id="mProfile" placeholder="Needed to flag them in Matchday" /></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label for="mGames">Games remaining</label><input type="number" id="mGames" min="1" max="20" value="1" /></div>
+      <div class="field" style="flex:1; min-width:200px;"><label for="mNote">Note (optional)</label><input type="text" id="mNote" maxlength="500" placeholder="e.g. Red card vs. X on 10/18, 2 of 3 served" style="width:100%;" /></div>
+      <button class="primary" id="mAddBtn" onclick="addManual()">Add suspension</button>
+    </div>
+    <div class="msg" id="suspensionsMsg"></div>
+  </div>
+
+  <div class="card">
+    <h2>3. Team kits</h2>
+    <p class="muted" style="margin:0;">Tournament teams have new team IDs, so their kits are copied automatically from the season team with the same name and gender (after each schedule sync). A team that already has its own kit entries is never changed. Run it now after new teams are scheduled:</p>
+    <div class="form-row"><button onclick="importKits(this)">Copy season kits to tournament teams now</button></div>
+    <div class="msg" id="kitsMsg"></div>
+  </div>
+
+</main>
+<script>
+  const T = window.TOURNAMENT_CONFIG || { name: 'Tournament', tiers: { Men: ['Gold', 'Silver', 'Bronze'], Women: ['Gold', 'Silver'] } };
+  document.getElementById('pageTitle').textContent = T.name + ' — Setup';
+  document.title = T.name + ' — Setup';
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  }
+  function setMsg(id, text, kind) {
+    const el = document.getElementById(id);
+    el.textContent = text || '';
+    el.className = 'msg' + (kind ? ' ' + kind : '');
+  }
+  async function api(method, url, body) {
+    const res = await fetch(url, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (res.status === 401) { window.location.href = '/oauth/login'; throw new Error('Not logged in'); }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || ('Request failed (' + res.status + ')'));
+    return data;
+  }
+
+  let tournamentTeams = [];
+
+  // ---- 1. Division tiers ----------------------------------------------------
+  async function loadDivisions() {
+    const box = document.getElementById('divisionsBox');
+    try {
+      const { divisions } = await api('GET', '/api/tournament/divisions');
+      if (!divisions.length) {
+        box.innerHTML = '<p class="muted">No games found on the tournament dates yet. Divisions appear here once their games are scheduled in SportsEngine and synced (the sync runs every few minutes).</p>';
+        return;
+      }
+      box.innerHTML = `<table>
+        <tr><th>Gender</th><th>Division</th><th>Games</th><th>Teams (sample)</th><th>Tier</th></tr>
+        ${divisions.map(d => {
+          const tiers = d.gender === 'Women' ? T.tiers.Women : T.tiers.Men;
+          const opt = (v, label) => `<option value="${esc(v)}" ${d.tier === (v || null) ? 'selected' : ''}>${esc(label)}</option>`;
+          return `<tr>
+            <td>${esc(d.gender || '?')}</td>
+            <td><span class="muted">${esc(d.division_id)}</span>${d.season_name ? '<br>' + esc(d.season_name) + ' (season division)' : ''}</td>
+            <td>${d.games}</td>
+            <td class="muted">${esc(d.sample_teams.join(', '))}</td>
+            <td><select onchange="setTier('${esc(d.division_id)}', this)">
+              ${opt('', 'Unassigned')}${tiers.map(t => opt(t, t)).join('')}${opt('Excluded', 'Not in tournament')}
+            </select></td></tr>`;
+        }).join('')}
+      </table>`;
+    } catch (e) { box.innerHTML = '<p class="msg err">' + esc(e.message) + '</p>'; }
+  }
+  async function setTier(divisionId, selectEl) {
+    setMsg('divisionsMsg', 'Saving...');
+    try {
+      await api('PUT', '/api/tournament/divisions/' + encodeURIComponent(divisionId), { tier: selectEl.value || null });
+      setMsg('divisionsMsg', 'Saved.', 'ok');
+      loadTeams();
+    } catch (e) { setMsg('divisionsMsg', e.message, 'err'); loadDivisions(); }
+  }
+
+  // ---- 2. Suspensions -------------------------------------------------------
+  async function loadSuspensions() {
+    const box = document.getElementById('suspensionsBox');
+    try {
+      const { suspensions } = await api('GET', '/api/tournament/suspensions');
+      if (!suspensions.length) { box.innerHTML = '<p class="muted">None entered yet.</p>'; return; }
+      box.innerHTML = `<table>
+        <tr><th>Player</th><th>Team</th><th>Games</th><th>Served</th><th>Remaining</th><th>Note</th><th></th></tr>
+        ${suspensions.map(s => `<tr>
+          <td>${esc(s.player_name)}</td><td>${esc(s.team_name)}</td>
+          <td>${s.games_suspended}</td><td>${s.games_served}</td>
+          <td>${s.games_remaining > 0 ? '<b>' + s.games_remaining + '</b>' : '<span class="pill">Served</span>'}</td>
+          <td class="muted">${esc(s.note || '')}</td>
+          <td><button class="danger" onclick="deleteSuspension(${s.id}, '${esc(s.player_name).replace(/'/g, '&#39;')}')">Delete</button></td></tr>`).join('')}
+      </table>`;
+    } catch (e) { box.innerHTML = '<p class="msg err">' + esc(e.message) + '</p>'; }
+  }
+  async function deleteSuspension(id, name) {
+    if (!confirm('Delete the suspension entered for ' + name + '? They will no longer be flagged in Matchday.')) return;
+    try { await api('DELETE', '/api/tournament/suspensions/' + id); setMsg('suspensionsMsg', 'Deleted.', 'ok'); loadSuspensions(); loadCandidates(); }
+    catch (e) { setMsg('suspensionsMsg', e.message, 'err'); }
+  }
+
+  let candidates = [];
+  async function loadCandidates() {
+    const box = document.getElementById('candidatesBox');
+    try {
+      const data = await api('GET', '/api/tournament/suspension-candidates');
+      candidates = data.candidates;
+      if (!candidates.length) { box.innerHTML = '<p class="muted">No open season suspensions found.</p>'; return; }
+      box.innerHTML = `<table>
+        <tr><th>Player</th><th>Season team</th><th>Games left</th><th>Tournament team</th><th></th></tr>
+        ${candidates.map((c, i) => `<tr>
+          <td>${esc(c.player_name)}</td><td>${esc(c.season_team_name)}</td>
+          <td><input type="number" min="1" max="20" value="${c.remaining}" id="cg${i}" /></td>
+          <td>${c.tournament_team ? esc(c.tournament_team.team_name) : `<select id="ct${i}"><option value="">Pick team...</option>${teamOptions()}</select>`}</td>
+          <td>${c.already_added ? '<span class="pill">Added</span>' : `<button class="primary" onclick="addCandidate(${i}, this)">Add</button>`}</td></tr>`).join('')}
+      </table>`;
+    } catch (e) { box.innerHTML = '<p class="msg err">' + esc(e.message) + '</p>'; }
+  }
+  function teamOptions() {
+    return tournamentTeams.map(t => `<option value="${esc(t.team_id)}">${esc(t.team_name)}${t.gender ? ' (' + esc(t.gender) + ')' : ''}</option>`).join('');
+  }
+  async function addCandidate(i, btn) {
+    const c = candidates[i];
+    let team = c.tournament_team;
+    if (!team) {
+      const id = document.getElementById('ct' + i).value;
+      const t = tournamentTeams.find(x => x.team_id === id);
+      if (!t) { setMsg('suspensionsMsg', 'Pick the tournament team for ' + c.player_name + ' first.', 'err'); return; }
+      team = { team_id: t.team_id, team_name: t.team_name };
+    }
+    btn.disabled = true;
+    try {
+      await api('POST', '/api/tournament/suspensions', {
+        team_id: team.team_id, team_name: team.team_name, player_name: c.player_name, profile_id: c.profile_id,
+        games_remaining: document.getElementById('cg' + i).value,
+        note: 'Rolled over from ' + c.season_team_name + ' (season)',
+      });
+      setMsg('suspensionsMsg', 'Added ' + c.player_name + '.', 'ok');
+      loadSuspensions(); loadCandidates();
+    } catch (e) { setMsg('suspensionsMsg', e.message, 'err'); btn.disabled = false; }
+  }
+
+  async function loadTeams() {
+    try {
+      const { teams } = await api('GET', '/api/tournament/teams');
+      tournamentTeams = teams;
+      const sel = document.getElementById('mTeam');
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">' + (teams.length ? 'Select a team...' : 'No tournament teams yet') + '</option>' + teamOptions();
+      sel.value = cur;
+    } catch (e) { setMsg('suspensionsMsg', e.message, 'err'); }
+  }
+
+  async function onManualTeamChange() {
+    const teamId = document.getElementById('mTeam').value;
+    const personSel = document.getElementById('mPerson');
+    document.getElementById('mTypedRow').style.display = 'none';
+    if (!teamId) { personSel.disabled = true; personSel.innerHTML = '<option value="">Select a team first</option>'; return; }
+    personSel.disabled = true;
+    personSel.innerHTML = '<option value="">Loading roster...</option>';
+    try {
+      const { people } = await api('GET', '/api/tournament/roster?teamId=' + encodeURIComponent(teamId));
+      if (!people.length) {
+        personSel.innerHTML = '<option value="">No roster found</option>';
+        document.getElementById('mTypedRow').style.display = 'flex'; // fall back to typing name + profile ID
+        return;
+      }
+      personSel.innerHTML = '<option value="">Select...</option>' +
+        people.map(p => `<option value="${esc(p.profile_id)}" data-name="${esc(p.name)}">${esc(p.name)}${p.jersey ? ' #' + esc(p.jersey) : ''} — ${esc(p.role)}</option>`).join('') +
+        '<option value="__typed__">Not listed — type name and profile ID</option>';
+      personSel.disabled = false;
+      personSel.onchange = () => { document.getElementById('mTypedRow').style.display = personSel.value === '__typed__' ? 'flex' : 'none'; };
+    } catch (e) {
+      personSel.innerHTML = '<option value="">Could not load roster</option>';
+      document.getElementById('mTypedRow').style.display = 'flex';
+      setMsg('suspensionsMsg', 'Could not load the roster (' + e.message + '). You can type the name and profile ID instead.', 'err');
+    }
+  }
+
+  async function addManual() {
+    const teamSel = document.getElementById('mTeam');
+    const team = tournamentTeams.find(t => t.team_id === teamSel.value);
+    if (!team) { setMsg('suspensionsMsg', 'Select a tournament team.', 'err'); return; }
+    const personSel = document.getElementById('mPerson');
+    let name, profile;
+    if (document.getElementById('mTypedRow').style.display !== 'none') {
+      name = document.getElementById('mName').value.trim();
+      profile = document.getElementById('mProfile').value.trim();
+    } else {
+      const opt = personSel.options[personSel.selectedIndex];
+      profile = personSel.value;
+      name = opt && opt.getAttribute('data-name');
+    }
+    if (!name || !profile || profile === '__typed__') { setMsg('suspensionsMsg', 'Choose a person from the roster, or type their name and profile ID.', 'err'); return; }
+    const btn = document.getElementById('mAddBtn');
+    btn.disabled = true;
+    try {
+      await api('POST', '/api/tournament/suspensions', {
+        team_id: team.team_id, team_name: team.team_name, player_name: name, profile_id: profile,
+        games_remaining: document.getElementById('mGames').value, note: document.getElementById('mNote').value,
+      });
+      setMsg('suspensionsMsg', 'Added ' + name + '.', 'ok');
+      document.getElementById('mNote').value = '';
+      document.getElementById('mName').value = '';
+      document.getElementById('mProfile').value = '';
+      loadSuspensions(); loadCandidates();
+    } catch (e) { setMsg('suspensionsMsg', e.message, 'err'); }
+    btn.disabled = false;
+  }
+
+  // ---- 3. Kits ----------------------------------------------------------------
+  async function importKits(btn) {
+    btn.disabled = true;
+    setMsg('kitsMsg', 'Copying...');
+    try {
+      const r = await api('POST', '/api/tournament/import-kits');
+      let text = r.copiedTeams + ' team(s) got kits copied from their season team (' + r.copiedKits + ' kits). ' + r.alreadyHadKits + ' already had kits.';
+      if (r.noSeasonKits.length) text += ' No season kits found for: ' + r.noSeasonKits.join(', ') + '.';
+      setMsg('kitsMsg', text, 'ok');
+    } catch (e) { setMsg('kitsMsg', e.message, 'err'); }
+    btn.disabled = false;
+  }
+
+  (async function init() {
+    await loadTeams();
+    loadDivisions();
+    loadSuspensions();
+    loadCandidates();
+  })();
+</script>
+</body>
+</html>

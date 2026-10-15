@@ -87,6 +87,29 @@ const RIBBON_SYNC_DAYS_BACK = 6;
 // never shown in Match Reports (it caps at the end of today).
 const RIBBON_SYNC_DAYS_FORWARD = 3;
 
+// ---------------------------------------------------------------------------
+// TOURNAMENT MODE - the same code, deployed a second time with
+// TOURNAMENT_MODE=true and pointed at the SAME database. In this mode the app:
+//   - syncs only the tournament dates (TOURNAMENT_START..TOURNAMENT_END,
+//     inclusive, Eastern days) instead of the rolling season window;
+//   - shows ONLY those dates in Match Reports and Misconduct Review, with
+//     Wed-Sun day buttons, a Men/Women filter and a Gold/Silver/Bronze tier
+//     filter instead of the season's conference/division/team/date filters;
+//   - lists only tournament teams on the Team Kits page (season kits are
+//     copied to them by team name + gender);
+//   - adds a /tournament page: assign each division a tier, and manually enter
+//     suspended players rolling over from the season.
+// Env: TOURNAMENT_MODE=true, TOURNAMENT_START=2026-11-11, TOURNAMENT_END=2026-11-15
+//      (both optional - these are the defaults), TOURNAMENT_NAME (optional),
+//      TOURNAMENT_SYNC_INTERVAL_MINUTES (optional, default 15).
+// ---------------------------------------------------------------------------
+const TOURNAMENT_MODE = process.env.TOURNAMENT_MODE === 'true';
+const TOURNAMENT_NAME = process.env.TOURNAMENT_NAME || 'USCCS Playoff Tournament';
+const TOURNAMENT_START = process.env.TOURNAMENT_START || '2026-11-11';
+const TOURNAMENT_END = process.env.TOURNAMENT_END || '2026-11-15';
+const TOURNAMENT_SYNC_INTERVAL_MINUTES = parseFloat(process.env.TOURNAMENT_SYNC_INTERVAL_MINUTES || '15');
+const TOURNAMENT_TIER_VALUES = ['Gold', 'Silver', 'Bronze', 'Excluded']; // Excluded = a division in these dates that is NOT part of the tournament
+
 const SESSION_LIFETIME_MS = 8 * 60 * 60 * 1000; // 8 hours
 
 // ---------- Postgres ----------
@@ -614,8 +637,10 @@ async function fetchGamesInRange(from, to) {
 // typed directly into SportsEngine is now tracked separately via the
 // standalone "SE manual score entry" flag, which is also set manually by an
 // admin (see the flag-se-manual-entry endpoint below).
-async function runScheduleSyncForRange(rangeFrom, rangeTo) {
-  const syncHorizon = getEndOfDayEasternPlus(new Date(), RIBBON_SYNC_DAYS_FORWARD);
+async function runScheduleSyncForRange(rangeFrom, rangeTo, opts = {}) {
+  // Tournament mode passes ignoreHorizon so the whole tournament window (which
+  // is mostly in the future) is synced, not just the next few days.
+  const syncHorizon = opts.ignoreHorizon ? rangeTo : getEndOfDayEasternPlus(new Date(), RIBBON_SYNC_DAYS_FORWARD);
   const effectiveRangeTo = rangeTo < syncHorizon ? rangeTo : syncHorizon;
 
   const games = await fetchGamesInRange(rangeFrom.toISOString(), effectiveRangeTo.toISOString());
@@ -658,6 +683,26 @@ async function runAutomaticScheduleSync() {
     // scheduled attempt - the ribbon app just serves whatever's already
     // cached until the next run succeeds.
     console.error('[schedule-sync] Automatic sync error (will retry on next scheduled run):', err.message);
+  }
+}
+
+// Tournament mode's replacement for the rolling sync above: pulls every game
+// in the tournament window, past or future, then makes sure new tournament
+// teams have kits copied over from their season teams.
+async function runTournamentSync() {
+  const startedAt = Date.now();
+  try {
+    const b = tournamentBounds();
+    const result = await runScheduleSyncForRange(b.from, b.to, { ignoreHorizon: true });
+    console.log(`[tournament-sync] ${result.syncedCount} games synced for ${TOURNAMENT_START}..${TOURNAMENT_END}, in ${Date.now() - startedAt}ms.`);
+    try {
+      const kitResult = await importSeasonKitsForTournamentTeams();
+      if (kitResult.copiedTeams > 0) console.log(`[tournament-sync] Copied season kits to ${kitResult.copiedTeams} tournament team(s).`);
+    } catch (kitErr) {
+      console.warn('[tournament-sync] Kit import skipped:', kitErr.message);
+    }
+  } catch (err) {
+    console.error('[tournament-sync] Sync error (will retry on next run):', err.message);
   }
 }
 
@@ -784,6 +829,181 @@ function groupKitRows(rows) {
     };
   }
   return byTeam;
+}
+
+// ---------------------------------------------------------------------------
+// TOURNAMENT MODE helpers (see the TOURNAMENT_MODE comment near the top).
+// ---------------------------------------------------------------------------
+
+// First instant of the first tournament day through the last instant of the
+// last tournament day, as Eastern calendar days (same convention as the rest
+// of this app).
+function tournamentBounds() {
+  return { from: getEasternDayBounds(TOURNAMENT_START).start, to: getEasternDayBounds(TOURNAMENT_END).end };
+}
+
+// [{ date: '2026-11-11', label: 'Wed' }, ...] for every day START..END inclusive.
+function tournamentDays() {
+  const [y1, m1, d1] = TOURNAMENT_START.split('-').map(Number);
+  const [y2, m2, d2] = TOURNAMENT_END.split('-').map(Number);
+  const out = [];
+  const end = Date.UTC(y2, m2 - 1, d2, 12);
+  for (let t = Date.UTC(y1, m1 - 1, d1, 12); t <= end && out.length < 31; t += 24 * 60 * 60 * 1000) {
+    const dt = new Date(t);
+    out.push({ date: dt.toISOString().slice(0, 10), label: dt.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }) });
+  }
+  return out;
+}
+
+// Injects the tournament settings into a page so its script can read
+// window.TOURNAMENT_CONFIG (only ever called in tournament mode).
+function injectTournamentConfig(html) {
+  const cfg = {
+    name: TOURNAMENT_NAME,
+    start: TOURNAMENT_START,
+    end: TOURNAMENT_END,
+    days: tournamentDays(),
+    tiers: { Men: ['Gold', 'Silver', 'Bronze'], Women: ['Gold', 'Silver'] },
+  };
+  const json = JSON.stringify(cfg).replace(/</g, '\\u003c');
+  return html.replace('</head>', `<script>window.TOURNAMENT_CONFIG = ${json};</script></head>`);
+}
+
+async function ensureTournamentTables() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS tournament_division_tiers (
+        division_id TEXT PRIMARY KEY,
+        tier TEXT NOT NULL CHECK (tier IN ('Gold','Silver','Bronze','Excluded')),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_by TEXT
+      )
+    `);
+  } catch (err) {
+    console.error('[tournament] Could not ensure tournament_division_tiers table exists:', err.message);
+  }
+  // Manually entered (rolled-over) suspensions live in the existing
+  // suspensions table, so matchday's suspended-player flag, its check-in block
+  // and the games-served countdown all work on them with no further changes.
+  // source/note/created_by mark and describe the manual rows.
+  try {
+    await pool.query(`ALTER TABLE suspensions ADD COLUMN IF NOT EXISTS source TEXT, ADD COLUMN IF NOT EXISTS note TEXT, ADD COLUMN IF NOT EXISTS created_by TEXT`);
+  } catch (err) {
+    console.error('[tournament] Could not add source/note columns to suspensions:', err.message);
+  }
+  // A rolled-over suspension has no match-report entry behind it.
+  for (const col of ['entry_id', 'standard_games', 'games_suspended']) {
+    try { await pool.query(`ALTER TABLE suspensions ALTER COLUMN ${col} DROP NOT NULL`); }
+    catch (err) { /* column may not exist or already be nullable - fine */ }
+  }
+}
+
+async function loadTournamentTierMap() {
+  const r = await pool.query('SELECT division_id, tier FROM tournament_division_tiers');
+  return new Map(r.rows.map(x => [x.division_id, x.tier]));
+}
+
+// "Stanford" and "stanford " and "Stanford." all match; gender keeps the men's
+// and women's teams of the same school apart.
+function normTeamKey(name, gender) {
+  return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() + '|' + (gender || '');
+}
+
+// Every team with a game in the tournament window (excluding divisions marked
+// Excluded and Ozark), with its division's tier.
+async function getTournamentTeams() {
+  const b = tournamentBounds();
+  const [teamsResult, tiers] = await Promise.all([
+    pool.query(`
+      SELECT team_id, MAX(team_name) AS team_name, MAX(gender) AS gender, MAX(division_id) AS division_id FROM (
+        SELECT home_team_id AS team_id, home_team AS team_name, gender, division_id FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2
+        UNION ALL
+        SELECT away_team_id, away_team, gender, division_id FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2
+      ) t WHERE team_id IS NOT NULL GROUP BY team_id`, [b.from.toISOString(), b.to.toISOString()]),
+    loadTournamentTierMap(),
+  ]);
+  return teamsResult.rows
+    .filter(t => tiers.get(t.division_id) !== 'Excluded' && !OZARK_KIT_EXCLUDED_DIVISIONS.includes(t.division_id))
+    .map(t => ({ ...t, tier: tiers.get(t.division_id) || null }));
+}
+
+// Tournament teams have new team IDs, so they start with no kits. This copies
+// the kit rows (colors + photo URLs) of the same-named, same-gender season
+// team onto any tournament team that has no kit rows of its own yet. Safe to
+// run repeatedly: a team that already has kit rows is never touched.
+async function importSeasonKitsForTournamentTeams() {
+  const tTeams = await getTournamentTeams();
+  const summary = { tournamentTeams: tTeams.length, alreadyHadKits: 0, copiedTeams: 0, copiedKits: 0, noSeasonKits: [] };
+  if (!tTeams.length) return summary;
+  const tIds = tTeams.map(t => t.team_id);
+  const own = await pool.query('SELECT DISTINCT team_id FROM team_kits WHERE team_id = ANY($1)', [tIds]);
+  const hasOwn = new Set(own.rows.map(r => r.team_id));
+  summary.alreadyHadKits = hasOwn.size;
+  const needing = tTeams.filter(t => !hasOwn.has(t.team_id));
+  if (!needing.length) return summary;
+
+  // Every other team the system has ever seen, keyed by name + gender.
+  const seasonResult = await pool.query(`
+    SELECT DISTINCT team_id, team_name, gender FROM (
+      SELECT home_team_id AS team_id, home_team AS team_name, gender FROM schedule_games_cache
+      UNION SELECT away_team_id, away_team, gender FROM schedule_games_cache
+    ) t WHERE team_id IS NOT NULL AND team_id <> ALL($1)`, [tIds]);
+  const idsByKey = new Map();
+  const addCandidate = (id, name, gender) => {
+    if (!id || tIds.includes(id)) return;
+    const k = normTeamKey(name, gender);
+    if (!idsByKey.has(k)) idsByKey.set(k, new Set());
+    idsByKey.get(k).add(id);
+  };
+  seasonResult.rows.forEach(r => addCandidate(r.team_id, r.team_name, r.gender));
+  (kitTeamListFromFile || []).forEach(t => addCandidate(t.team_id, t.team_name, t.gender));
+
+  const candidateIds = [...new Set([...idsByKey.values()].flatMap(s => [...s]))];
+  const kitResult = candidateIds.length
+    ? await pool.query('SELECT * FROM team_kits WHERE team_id = ANY($1)', [candidateIds])
+    : { rows: [] };
+  const kitRowsByTeam = new Map();
+  for (const r of kitResult.rows) {
+    if (!kitRowsByTeam.has(r.team_id)) kitRowsByTeam.set(r.team_id, []);
+    kitRowsByTeam.get(r.team_id).push(r);
+  }
+
+  for (const t of needing) {
+    const candidates = [...(idsByKey.get(normTeamKey(t.team_name, t.gender)) || [])].filter(id => kitRowsByTeam.has(id));
+    if (!candidates.length) { summary.noSeasonKits.push(t.team_name + (t.gender ? ` (${t.gender})` : '')); continue; }
+    // If several season teams share the name, use the one with the most kits
+    // set up (then the most recently edited).
+    candidates.sort((a, b) => {
+      const ra = kitRowsByTeam.get(a), rb = kitRowsByTeam.get(b);
+      if (rb.length !== ra.length) return rb.length - ra.length;
+      const ta = Math.max(...ra.map(r => new Date(r.updated_at).getTime()));
+      const tb = Math.max(...rb.map(r => new Date(r.updated_at).getTime()));
+      return tb - ta;
+    });
+    for (const r of kitRowsByTeam.get(candidates[0])) {
+      await pool.query(
+        `INSERT INTO team_kits (team_id, kit_type, jersey_color, shorts_color, socks_color, jersey_image_url, shorts_image_url, socks_image_url, updated_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'season kit import')
+         ON CONFLICT (team_id, kit_type) DO NOTHING`,
+        [t.team_id, r.kit_type, r.jersey_color, r.shorts_color, r.socks_color, r.jersey_image_url, r.shorts_image_url, r.socks_image_url]
+      );
+      summary.copiedKits++;
+    }
+    summary.copiedTeams++;
+  }
+  return summary;
+}
+
+// A photo can now be referenced by more than one team (season kits are copied
+// to tournament teams by URL), so a stored file is only deleted once no kit
+// row points at it any more.
+async function deleteKitImageIfUnused(imageUrl) {
+  const storagePath = kitStoragePathFromUrl(imageUrl);
+  if (!storagePath) return;
+  const still = await pool.query(
+    'SELECT 1 FROM team_kits WHERE jersey_image_url = $1 OR shorts_image_url = $1 OR socks_image_url = $1 LIMIT 1', [imageUrl]);
+  if (still.rowCount > 0) return;
+  await supabaseStorageRequest('DELETE', storagePath);
 }
 
 function readJsonBody(req, limitBytes) {
@@ -936,6 +1156,209 @@ const server = http.createServer(async (req, res) => {
     return res.end(JSON.stringify({ name: session.name, email: session.email, seUserId: session.se_user_id }));
   }
 
+  // ---- Tournament mode API (404 in the regular deployment) ------------------
+  if (TOURNAMENT_MODE && url.pathname.startsWith('/api/tournament/')) {
+    const session = await getSession(cookies.admin_session);
+    if (!session) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Not logged in' }));
+    }
+    const sendJson = (status, obj) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
+    try {
+      const b = tournamentBounds();
+      const fromIso = b.from.toISOString();
+      const toIso = b.to.toISOString();
+
+      // GET /api/tournament/divisions - every division that has a game in the
+      // tournament dates, with the tier an admin assigned (if any). This is how
+      // division IDs get picked up: they appear here as soon as SportsEngine
+      // games for them are synced.
+      if (req.method === 'GET' && url.pathname === '/api/tournament/divisions') {
+        const [divResult, divTeamsResult, tiers] = await Promise.all([
+          pool.query(`
+            SELECT division_id, MAX(gender) AS gender, COUNT(*) AS games, MIN(start_time) AS first_game
+            FROM schedule_games_cache
+            WHERE start_time >= $1 AND start_time <= $2 AND division_id IS NOT NULL
+            GROUP BY division_id ORDER BY MAX(gender), division_id`, [fromIso, toIso]),
+          pool.query(`
+            SELECT DISTINCT division_id, team FROM (
+              SELECT division_id, home_team AS team FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2
+              UNION ALL
+              SELECT division_id, away_team FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2
+            ) t WHERE division_id IS NOT NULL AND team IS NOT NULL ORDER BY team`, [fromIso, toIso]),
+          loadTournamentTierMap(),
+        ]);
+        const sampleByDivision = new Map();
+        for (const r of divTeamsResult.rows) {
+          if (!sampleByDivision.has(r.division_id)) sampleByDivision.set(r.division_id, []);
+          const arr = sampleByDivision.get(r.division_id);
+          if (arr.length < 6) arr.push(r.team);
+        }
+        const divisions = divResult.rows
+          .filter(d => !OZARK_KIT_EXCLUDED_DIVISIONS.includes(d.division_id))
+          .map(d => ({
+            division_id: d.division_id,
+            gender: d.gender || null,
+            games: parseInt(d.games, 10),
+            first_game: d.first_game,
+            sample_teams: sampleByDivision.get(d.division_id) || [],
+            season_name: (DIVISION_LOOKUP[d.division_id] && DIVISION_LOOKUP[d.division_id].name) || null,
+            tier: tiers.get(d.division_id) || null,
+          }));
+        return sendJson(200, { divisions });
+      }
+
+      // PUT /api/tournament/divisions/:divisionId  Body: { tier: 'Gold'|'Silver'|'Bronze'|'Excluded'|null }
+      const tierMatch = url.pathname.match(/^\/api\/tournament\/divisions\/([^/]+)$/);
+      if (req.method === 'PUT' && tierMatch) {
+        const divisionId = decodeURIComponent(tierMatch[1]);
+        const payload = await readJsonBody(req, 4 * 1024);
+        const tier = payload.tier || null;
+        if (tier !== null && !TOURNAMENT_TIER_VALUES.includes(tier)) return sendJson(400, { error: 'Tier must be Gold, Silver, Bronze or Excluded.' });
+        if (tier === null) {
+          await pool.query('DELETE FROM tournament_division_tiers WHERE division_id = $1', [divisionId]);
+        } else {
+          await pool.query(
+            `INSERT INTO tournament_division_tiers (division_id, tier, updated_by) VALUES ($1, $2, $3)
+             ON CONFLICT (division_id) DO UPDATE SET tier = EXCLUDED.tier, updated_at = now(), updated_by = EXCLUDED.updated_by`,
+            [divisionId, tier, session.name || null]);
+        }
+        return sendJson(200, { success: true });
+      }
+
+      // GET /api/tournament/teams - tournament teams (for the suspension form).
+      if (req.method === 'GET' && url.pathname === '/api/tournament/teams') {
+        const teams = (await getTournamentTeams()).sort((a, b) => (a.team_name || '').localeCompare(b.team_name || ''));
+        return sendJson(200, { teams });
+      }
+
+      // GET /api/tournament/roster?teamId= - the SportsEngine roster (players
+      // and staff, with their profile IDs) for one tournament team, so the
+      // suspension can be tied to the right person.
+      if (req.method === 'GET' && url.pathname === '/api/tournament/roster') {
+        const teamId = url.searchParams.get('teamId');
+        if (!teamId) return sendJson(400, { error: 'teamId is required' });
+        const data = await callSeGraphQLWithRetry(`
+          query Team($id: String!) {
+            team(id: $id) {
+              id name
+              players { firstName lastName jerseyNumber profileId }
+              staff { firstName lastName profileId title }
+            }
+          }`, { id: teamId });
+        const team = data.team || {};
+        const people = [
+          ...(team.players || []).map(p => ({ profile_id: p.profileId, name: `${p.firstName || ''} ${p.lastName || ''}`.trim(), role: 'Player', jersey: p.jerseyNumber || null })),
+          ...(team.staff || []).map(s => ({ profile_id: s.profileId, name: `${s.firstName || ''} ${s.lastName || ''}`.trim(), role: s.title || 'Staff', jersey: null })),
+        ].filter(p => p.profile_id && p.name).sort((a, c) => a.name.localeCompare(c.name));
+        return sendJson(200, { people });
+      }
+
+      // GET /api/tournament/suspensions - the manually entered rollover
+      // suspensions, with games served so far (same countdown matchday uses:
+      // submitted match reports for that team after the suspension started).
+      if (req.method === 'GET' && url.pathname === '/api/tournament/suspensions') {
+        const r = await pool.query(`
+          SELECT s.id, s.profile_id, s.team_id, s.team_name, s.player_name, s.games_suspended, s.note, s.created_at, s.created_by,
+            (SELECT COUNT(*) FROM match_report_scores mrs
+              WHERE (mrs.team1_id = s.team_id OR mrs.team2_id = s.team_id)
+              AND mrs.game_date > s.issued_from_game_date AND mrs.game_date < now()) AS games_served
+          FROM suspensions s WHERE s.source = 'tournament_rollover'
+          ORDER BY s.team_name, s.player_name`);
+        const suspensions = r.rows.map(x => {
+          const served = Math.min(parseInt(x.games_served, 10), x.games_suspended);
+          return { ...x, games_served: served, games_remaining: Math.max(x.games_suspended - served, 0) };
+        });
+        return sendJson(200, { suspensions });
+      }
+
+      // POST /api/tournament/suspensions
+      // Body: { team_id, team_name, player_name, profile_id, games_remaining, note }
+      // games_remaining = how many games the player still has to sit out, counting
+      // from the start of the tournament (or from now, if entered mid-tournament).
+      if (req.method === 'POST' && url.pathname === '/api/tournament/suspensions') {
+        const p = await readJsonBody(req, 10 * 1024);
+        const games = parseInt(p.games_remaining, 10);
+        if (!p.team_id || !p.team_name || !p.player_name || !p.profile_id) return sendJson(400, { error: 'Team, player and SportsEngine profile ID are all required.' });
+        if (!Number.isInteger(games) || games < 1 || games > 20) return sendJson(400, { error: 'Games remaining must be a whole number from 1 to 20.' });
+        const dup = await pool.query(`SELECT 1 FROM suspensions WHERE source = 'tournament_rollover' AND team_id = $1 AND profile_id = $2`, [p.team_id, String(p.profile_id)]);
+        if (dup.rowCount > 0) return sendJson(409, { error: p.player_name + ' already has a rolled-over suspension on this team. Delete it first to re-enter it.' });
+        // Games count toward serving only if played AFTER this moment.
+        const startMinus = new Date(b.from.getTime() - 1000);
+        const issuedFrom = new Date() > startMinus ? new Date() : startMinus;
+        await pool.query(
+          `INSERT INTO suspensions (profile_id, team_id, team_name, player_name, games_suspended, standard_games, issued_from_game_date, status, source, note, created_by, created_at)
+           VALUES ($1, $2, $3, $4, $5, $5, $6, 'active', 'tournament_rollover', $7, $8, now())`,
+          [String(p.profile_id), p.team_id, p.team_name, p.player_name, games, issuedFrom.toISOString(), (p.note || '').toString().slice(0, 500) || null, session.name || null]);
+        return sendJson(200, { success: true });
+      }
+
+      // DELETE /api/tournament/suspensions/:id - only manual rollover rows.
+      const susDeleteMatch = url.pathname.match(/^\/api\/tournament\/suspensions\/(\d+)$/);
+      if (req.method === 'DELETE' && susDeleteMatch) {
+        const del = await pool.query(`DELETE FROM suspensions WHERE id = $1 AND source = 'tournament_rollover'`, [parseInt(susDeleteMatch[1], 10)]);
+        return sendJson(del.rowCount ? 200 : 404, del.rowCount ? { success: true } : { error: 'Not found (only manually entered suspensions can be deleted here).' });
+      }
+
+      // GET /api/tournament/suspension-candidates - season suspensions that
+      // still have games left, matched to the same school's tournament team by
+      // name + gender, so a rollover is one click. Remaining games is as of NOW;
+      // the admin can change it before adding.
+      if (req.method === 'GET' && url.pathname === '/api/tournament/suspension-candidates') {
+        const [susResult, tTeams, addedResult] = await Promise.all([
+          pool.query(`
+            SELECT s.id, s.profile_id, s.team_id, s.team_name, s.player_name,
+              COALESCE(s.games_suspended, s.standard_games) AS required,
+              (SELECT COUNT(*) FROM match_report_scores mrs
+                WHERE (mrs.team1_id = s.team_id OR mrs.team2_id = s.team_id)
+                AND mrs.game_date > s.issued_from_game_date AND mrs.game_date < now()) AS served
+            FROM suspensions s WHERE s.source IS DISTINCT FROM 'tournament_rollover'`),
+          getTournamentTeams(),
+          pool.query(`SELECT profile_id FROM suspensions WHERE source = 'tournament_rollover'`),
+        ]);
+        const addedProfiles = new Set(addedResult.rows.map(r => r.profile_id));
+        const open = susResult.rows
+          .map(r => ({ ...r, remaining: (r.required || 0) - parseInt(r.served, 10) }))
+          .filter(r => r.remaining > 0);
+        const seasonTeamIds = [...new Set(open.map(r => r.team_id))];
+        const genderByTeam = new Map();
+        if (seasonTeamIds.length) {
+          const g = await pool.query(`
+            SELECT team_id, MAX(gender) AS gender FROM (
+              SELECT home_team_id AS team_id, gender FROM schedule_games_cache WHERE home_team_id = ANY($1)
+              UNION ALL SELECT away_team_id, gender FROM schedule_games_cache WHERE away_team_id = ANY($1)
+            ) t GROUP BY team_id`, [seasonTeamIds]);
+          g.rows.forEach(x => genderByTeam.set(x.team_id, x.gender));
+        }
+        const tByKey = new Map(tTeams.map(t => [normTeamKey(t.team_name, t.gender), t]));
+        const candidates = open.map(r => {
+          const t = tByKey.get(normTeamKey(r.team_name, genderByTeam.get(r.team_id) || null));
+          return {
+            profile_id: r.profile_id,
+            player_name: r.player_name,
+            season_team_name: r.team_name,
+            remaining: r.remaining,
+            already_added: addedProfiles.has(r.profile_id),
+            tournament_team: t ? { team_id: t.team_id, team_name: t.team_name } : null,
+          };
+        }).sort((a, c) => (a.season_team_name || '').localeCompare(c.season_team_name || '') || (a.player_name || '').localeCompare(c.player_name || ''));
+        return sendJson(200, { candidates });
+      }
+
+      // POST /api/tournament/import-kits - copy season kits onto tournament
+      // teams that have none (also runs automatically after each sync).
+      if (req.method === 'POST' && url.pathname === '/api/tournament/import-kits') {
+        const summary = await importSeasonKitsForTournamentTeams();
+        return sendJson(200, summary);
+      }
+
+      return sendJson(404, { error: 'Unknown tournament endpoint' });
+    } catch (err) {
+      console.error('[api/tournament] Error:', err.message);
+      return sendJson(err.statusCode || 500, { error: err.message });
+    }
+  }
+
   // GET /api/misconduct/teams — distinct team list, for populating the filter dropdown
   if (req.method === 'GET' && url.pathname === '/api/misconduct/teams') {
     const session = await getSession(cookies.admin_session);
@@ -944,6 +1367,12 @@ const server = http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ error: 'Not logged in' }));
     }
     try {
+      if (TOURNAMENT_MODE) {
+        // Tournament mode lists only tournament teams.
+        const tTeams = (await getTournamentTeams()).sort((a, b) => (a.team_name || '').localeCompare(b.team_name || ''));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ teams: tTeams.map(t => ({ team_id: t.team_id, team_name: t.team_name + (t.gender ? ` (${t.gender})` : '') })) }));
+      }
       const result = await pool.query(`
         SELECT DISTINCT team_id, team_name FROM match_report_entries
         WHERE event_type IN ('Yellow Card', 'Red Card')
@@ -1024,6 +1453,7 @@ const server = http.createServer(async (req, res) => {
       const gender = url.searchParams.get('gender');
       const dateFromParam = url.searchParams.get('dateFrom');
       const dateToParam = url.searchParams.get('dateTo');
+      const tierParam = url.searchParams.get('tier'); // tournament mode only: Gold | Silver | Bronze | Unassigned
 
       // Default to the last 30 days through today (Eastern) if no range
       // given - a full-season fetch on every page load would be
@@ -1031,14 +1461,26 @@ const server = http.createServer(async (req, res) => {
       const now = new Date();
       const endOfTodayEastern = getEndOfTodayEastern(now);
       const defaultFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-      const rangeFrom = dateFromParam ? getEasternDayBounds(dateFromParam).start : defaultFrom;
-      // Never look past the end of today (Eastern) - this view is
-      // specifically PAST games, but "today" counts even before its last
-      // game has kicked off. This only affects what's shown from the
-      // already-synced cache - it never triggers a new SportsEngine fetch,
-      // which only ever happens via the manual sync button below.
-      const rangeToRaw = dateToParam ? getEasternDayBounds(dateToParam).end : now;
-      const rangeTo = rangeToRaw < endOfTodayEastern ? rangeToRaw : endOfTodayEastern;
+      let rangeFrom;
+      let rangeTo;
+      if (TOURNAMENT_MODE) {
+        // Tournament mode: only the tournament dates, past AND future (every
+        // scheduled game shows), whatever range was requested.
+        const tb = tournamentBounds();
+        const reqFrom = dateFromParam ? getEasternDayBounds(dateFromParam).start : tb.from;
+        const reqTo = dateToParam ? getEasternDayBounds(dateToParam).end : tb.to;
+        rangeFrom = reqFrom < tb.from ? tb.from : reqFrom;
+        rangeTo = reqTo > tb.to ? tb.to : reqTo;
+      } else {
+        rangeFrom = dateFromParam ? getEasternDayBounds(dateFromParam).start : defaultFrom;
+        // Never look past the end of today (Eastern) - this view is
+        // specifically PAST games, but "today" counts even before its last
+        // game has kicked off. This only affects what's shown from the
+        // already-synced cache - it never triggers a new SportsEngine fetch,
+        // which only ever happens via the manual sync button below.
+        const rangeToRaw = dateToParam ? getEasternDayBounds(dateToParam).end : now;
+        rangeTo = rangeToRaw < endOfTodayEastern ? rangeToRaw : endOfTodayEastern;
+      }
 
       // Existing submitted-report data for this range, keyed by game_id
       // for easy merging below. Same query/shape as before.
@@ -1116,6 +1558,7 @@ const server = http.createServer(async (req, res) => {
       // every row below regardless of whether a real report exists yet.
       const locationByGameId = new Map(cacheResult.rows.map(g => [g.game_id, g.location_name]));
       const cacheStartByGameId = new Map(cacheResult.rows.map(g => [g.game_id, g.start_time]));
+      const gameStatusByGameId = new Map(cacheResult.rows.map(g => [g.game_id, g.game_status]));
 
       mergedRows = cacheResult.rows.map(g => {
         const existing = reportByGameId.get(g.game_id);
@@ -1160,6 +1603,16 @@ const server = http.createServer(async (req, res) => {
       const OZARK_DIVISION_IDS = ['6a4e96e46b8d1e01201ee2ce', '6a4e9b904b609600f0e70d42'];
       mergedRows = mergedRows.filter(r => !OZARK_DIVISION_IDS.includes(r.division_id));
 
+      // Tournament mode: drop divisions an admin marked "Excluded" (games in
+      // these dates that aren't part of the tournament) and apply the tier
+      // filter. Divisions with no tier yet are "Unassigned" and still show.
+      let tierMap = null;
+      if (TOURNAMENT_MODE) {
+        tierMap = await loadTournamentTierMap();
+        mergedRows = mergedRows.filter(r => tierMap.get(r.division_id) !== 'Excluded');
+        if (tierParam) mergedRows = mergedRows.filter(r => (tierMap.get(r.division_id) || 'Unassigned') === tierParam);
+      }
+
       // Apply the same filters to the merged set, regardless of whether a
       // report exists for a given game.
       if (divisions.length > 0) mergedRows = mergedRows.filter(r => divisions.includes(r.division_id));
@@ -1173,7 +1626,9 @@ const server = http.createServer(async (req, res) => {
       mergedRows.sort((a, b) => {
         const dateA = a.game_date ? new Date(a.game_date).getTime() : -Infinity;
         const dateB = b.game_date ? new Date(b.game_date).getTime() : -Infinity;
-        return dateB - dateA;
+        if (dateA === dateB) return 0;
+        // Season view: newest first. Tournament view: kickoff order within the day.
+        return TOURNAMENT_MODE ? (dateA < dateB ? -1 : 1) : (dateA < dateB ? 1 : -1);
       });
 
       let reports = mergedRows.map(r => {
@@ -1192,6 +1647,8 @@ const server = http.createServer(async (req, res) => {
         return {
           ...r,
           division_name: r.division_id ? ((DIVISION_LOOKUP[r.division_id] && DIVISION_LOOKUP[r.division_id].name) || r.division_id) : null,
+          tier: tierMap ? (tierMap.get(r.division_id) || null) : null, // tournament mode: Gold | Silver | Bronze | null
+          game_status: gameStatusByGameId.get(r.game_id) || null,
           // "MO report reviewed" (renamed from "MO report received") - a
           // purely manual, admin-entered flag. Never auto-set from a
           // SportsEngine score (see runScheduleSyncForRange).
@@ -1566,8 +2023,14 @@ const server = http.createServer(async (req, res) => {
       const includeIncidentReports = url.searchParams.get('includeIncidentReports') !== 'false'; // default true
       const teamId = url.searchParams.get('teamId') || null;
       const playerName = url.searchParams.get('playerName') || null;
-      const dateFrom = url.searchParams.get('dateFrom') || null;
-      const dateTo = url.searchParams.get('dateTo') || null;
+      let dateFrom = url.searchParams.get('dateFrom') || null;
+      let dateTo = url.searchParams.get('dateTo') || null;
+      if (TOURNAMENT_MODE) {
+        // Tournament mode: only misconduct from tournament games.
+        const tb = tournamentBounds();
+        dateFrom = tb.from.toISOString();
+        dateTo = tb.to.toISOString();
+      }
       // 'all' (default), 'pending', or 'reviewed' - filters on the same
       // pending/reviewed status the frontend already displays as a badge.
       // No review row yet counts as 'pending', same as the response
@@ -1824,6 +2287,9 @@ const server = http.createServer(async (req, res) => {
     }
     try {
       if (kitTeamListFromFile === null) loadKitTeamListFile();
+      // Tournament mode lists only tournament teams (kits for them are copied
+      // from the same-named season team - see importSeasonKitsForTournamentTeams).
+      const tournamentTeams = TOURNAMENT_MODE ? await getTournamentTeams() : null;
       const [cacheTeams, kitRows] = await Promise.all([
         pool.query(`
           SELECT DISTINCT team_id, team_name, division_id, gender FROM (
@@ -1835,7 +2301,7 @@ const server = http.createServer(async (req, res) => {
         pool.query('SELECT * FROM team_kits'),
       ]);
       const byTeam = new Map();
-      for (const t of [...kitTeamListFromFile, ...cacheTeams.rows]) {
+      for (const t of (tournamentTeams || [...kitTeamListFromFile, ...cacheTeams.rows])) {
         if (!t.team_id || byTeam.has(t.team_id)) continue; // file entry wins (it comes first)
         byTeam.set(t.team_id, t);
       }
@@ -1931,7 +2397,7 @@ const server = http.createServer(async (req, res) => {
     }
     try {
       const prior = await pool.query(`SELECT ${col} AS image_url FROM team_kits WHERE team_id = $1 AND kit_type = $2`, [teamId, kitType]);
-      const oldPath = prior.rows[0] && kitStoragePathFromUrl(prior.rows[0].image_url);
+      const oldUrl = (prior.rows[0] && prior.rows[0].image_url) || null;
       if (req.method === 'POST') {
         const payload = await readJsonBody(req, Math.ceil(KIT_IMAGE_MAX_BYTES * 1.4) + 2048);
         const ext = KIT_IMAGE_TYPES[payload.contentType];
@@ -1953,13 +2419,13 @@ const server = http.createServer(async (req, res) => {
            ON CONFLICT (team_id, kit_type) DO UPDATE SET ${col} = EXCLUDED.${col}, updated_at = now(), updated_by = EXCLUDED.updated_by`,
           [teamId, kitType, imageUrl, session.name || null]
         );
-        if (oldPath) supabaseStorageRequest('DELETE', oldPath).catch((e) => console.warn('[kits] Could not delete old image:', e.message));
+        if (oldUrl) deleteKitImageIfUnused(oldUrl).catch((e) => console.warn('[kits] Could not delete old image:', e.message));
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ success: true, image_url: imageUrl }));
       }
       await pool.query(`UPDATE team_kits SET ${col} = NULL, updated_at = now(), updated_by = $3 WHERE team_id = $1 AND kit_type = $2`,
         [teamId, kitType, session.name || null]);
-      if (oldPath) supabaseStorageRequest('DELETE', oldPath).catch((e) => console.warn('[kits] Could not delete old image:', e.message));
+      if (oldUrl) deleteKitImageIfUnused(oldUrl).catch((e) => console.warn('[kits] Could not delete old image:', e.message));
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: true }));
     } catch (err) {
@@ -2054,7 +2520,26 @@ const server = http.createServer(async (req, res) => {
         return res.end('index.html not found — make sure it is in the same folder as server.js');
       }
       res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end(data);
+      res.end(TOURNAMENT_MODE ? injectTournamentConfig(data) : data);
+    });
+    return;
+  }
+
+  // GET /tournament - tournament setup: division tiers and rolled-over
+  // suspensions. Only exists in tournament mode.
+  if (TOURNAMENT_MODE && req.method === 'GET' && url.pathname === '/tournament') {
+    const session = await getSession(cookies.admin_session);
+    if (!session) {
+      res.writeHead(302, { Location: '/oauth/login' });
+      return res.end();
+    }
+    fs.readFile(path.join(__dirname, 'tournament.html'), 'utf8', (err, data) => {
+      if (err) {
+        res.writeHead(404);
+        return res.end('tournament.html not found — make sure it is in the same folder as server.js');
+      }
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(injectTournamentConfig(data));
     });
     return;
   }
@@ -2073,7 +2558,7 @@ const server = http.createServer(async (req, res) => {
         return res.end('match-reports.html not found — make sure it is in the same folder as server.js');
       }
       res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end(data);
+      res.end(TOURNAMENT_MODE ? injectTournamentConfig(data) : data);
     });
     return;
   }
@@ -2108,6 +2593,15 @@ server.listen(PORT, async () => {
   await ensureTeamKitsTable();
   await ensureGameKitAssignmentsTable();
   loadKitTeamListFile();
-  runAutomaticScheduleSync();
-  setInterval(runAutomaticScheduleSync, RIBBON_SYNC_INTERVAL_MINUTES * 60 * 1000);
+  if (TOURNAMENT_MODE) {
+    // Tournament deployment: sync only the tournament dates (not the rolling
+    // season window), more often since scores and schedules change quickly.
+    console.log(`[tournament] TOURNAMENT_MODE on: ${TOURNAMENT_NAME}, ${TOURNAMENT_START} to ${TOURNAMENT_END} (Eastern).`);
+    await ensureTournamentTables();
+    runTournamentSync();
+    setInterval(runTournamentSync, TOURNAMENT_SYNC_INTERVAL_MINUTES * 60 * 1000);
+  } else {
+    runAutomaticScheduleSync();
+    setInterval(runAutomaticScheduleSync, RIBBON_SYNC_INTERVAL_MINUTES * 60 * 1000);
+  }
 });

@@ -55,6 +55,7 @@
   <span style="display:flex; align-items:center; gap:16px;">
     <a href="/match-reports">Match Reports</a>
     <a href="/kits">Team Kits</a>
+    <a href="/tournament" id="tournamentNavLink" style="display:none;">Tournament Setup</a>
     <span class="who" id="whoDisplay"></span>
   </span>
 </header>
@@ -152,6 +153,16 @@
       document.getElementById('whoDisplay').innerHTML =
         escapeHtml(who.name) + ' <a href="/oauth/logout">Log out</a>';
 
+      // Tournament deployment: the server already limits everything to the
+      // tournament dates, so the date pickers are hidden and the Tournament
+      // Setup link (suspension rollovers, division tiers) is shown.
+      if (window.TOURNAMENT_CONFIG) {
+        document.getElementById('tournamentNavLink').style.display = '';
+        document.getElementById('dateFrom').closest('.field').style.display = 'none';
+        document.getElementById('dateTo').closest('.field').style.display = 'none';
+        const t = document.querySelector('header');
+        if (t && t.firstChild) t.firstChild.textContent = window.TOURNAMENT_CONFIG.name + ' — Misconduct Review ';
+      }
       await loadTeams();
       await loadMisconduct();
     } catch (e) {
