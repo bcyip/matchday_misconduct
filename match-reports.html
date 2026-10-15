@@ -340,7 +340,10 @@
   // instead of "No USCCS Report" (only really happens in tournament mode,
   // where future games are listed too).
   function isUpcoming(r) {
-    return !r.has_report && !!r.game_date && new Date(r.game_date).getTime() > Date.now();
+    // Not yet "complete": no report and less than 2 hours since kickoff
+    // (covers games still to be played and games in progress). Grey until
+    // then; after that, a missing report turns red.
+    return !r.has_report && !!r.game_date && new Date(r.game_date).getTime() + 2 * 60 * 60 * 1000 > Date.now();
   }
 
   // ---- Tournament mode (window.TOURNAMENT_CONFIG is set by the server) -----
