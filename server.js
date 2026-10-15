@@ -109,6 +109,14 @@ const TOURNAMENT_START = process.env.TOURNAMENT_START || '2026-11-11';
 const TOURNAMENT_END = process.env.TOURNAMENT_END || '2026-11-15';
 const TOURNAMENT_SYNC_INTERVAL_MINUTES = parseFloat(process.env.TOURNAMENT_SYNC_INTERVAL_MINUTES || '15');
 const TOURNAMENT_TIER_VALUES = ['Gold', 'Silver', 'Bronze', 'Excluded']; // Excluded = a division in these dates that is NOT part of the tournament
+// League games are still being played during the tournament dates, so only
+// games whose SportsEngine season (the team's program name on the game, the
+// same field the gender is read from) is one of these count as tournament
+// games. Matching ignores case and accepts the name anywhere in the program
+// name, e.g. "College Club Soccer - 2026 National Tournament Men".
+// Override with TOURNAMENT_SEASON_NAMES (comma-separated).
+const TOURNAMENT_SEASON_NAMES = (process.env.TOURNAMENT_SEASON_NAMES || '2026 National Tournament Men,2026 National Tournament Women')
+  .split(',').map(s => s.trim()).filter(Boolean);
 
 const SESSION_LIFETIME_MS = 8 * 60 * 60 * 1000; // 8 hours
 
@@ -207,7 +215,8 @@ async function ensureLogoColumns() {
     await pool.query(`
       ALTER TABLE schedule_games_cache
         ADD COLUMN IF NOT EXISTS home_team_logo_url text,
-        ADD COLUMN IF NOT EXISTS away_team_logo_url text
+        ADD COLUMN IF NOT EXISTS away_team_logo_url text,
+        ADD COLUMN IF NOT EXISTS program_name text
     `);
   } catch (err) {
     console.error('[schedule-sync] Could not ensure logo columns exist:', err.message);
@@ -522,6 +531,7 @@ function extractGameInfo(event) {
   const gender = deriveGenderFromProgramName(programName) || (divisionInfo && divisionInfo.gender) || null;
 
   return {
+    programName,
     eventId: event.id,
     startTime: event.start || null,
     locationName,
@@ -649,16 +659,17 @@ async function runScheduleSyncForRange(rangeFrom, rangeTo, opts = {}) {
   let syncedCount = 0;
   for (const g of pastGames) {
     await pool.query(
-      `INSERT INTO schedule_games_cache (game_id, start_time, division_id, gender, location_name, home_team, home_team_id, away_team, away_team_id, game_status, se_home_score, se_away_score, home_team_logo_url, away_team_logo_url, synced_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now())
+      `INSERT INTO schedule_games_cache (game_id, start_time, division_id, gender, location_name, home_team, home_team_id, away_team, away_team_id, game_status, se_home_score, se_away_score, home_team_logo_url, away_team_logo_url, program_name, synced_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now())
        ON CONFLICT (game_id) DO UPDATE SET
          start_time = EXCLUDED.start_time, division_id = EXCLUDED.division_id, gender = EXCLUDED.gender,
          location_name = EXCLUDED.location_name, home_team = EXCLUDED.home_team, home_team_id = EXCLUDED.home_team_id,
          away_team = EXCLUDED.away_team, away_team_id = EXCLUDED.away_team_id, game_status = EXCLUDED.game_status,
          se_home_score = EXCLUDED.se_home_score, se_away_score = EXCLUDED.se_away_score,
          home_team_logo_url = EXCLUDED.home_team_logo_url, away_team_logo_url = EXCLUDED.away_team_logo_url,
+         program_name = EXCLUDED.program_name,
          synced_at = now()`,
-      [g.eventId, g.startTime, g.divisionId, g.gender, g.locationName, g.homeTeam, g.homeTeamId, g.awayTeam, g.awayTeamId, g.gameStatus, g.seHomeScore, g.seAwayScore, g.homeTeamLogoUrl, g.awayTeamLogoUrl]
+      [g.eventId, g.startTime, g.divisionId, g.gender, g.locationName, g.homeTeam, g.homeTeamId, g.awayTeam, g.awayTeamId, g.gameStatus, g.seHomeScore, g.seAwayScore, g.homeTeamLogoUrl, g.awayTeamLogoUrl, g.programName || null]
     );
     syncedCount++;
   }
@@ -842,6 +853,12 @@ function tournamentBounds() {
   return { from: getEasternDayBounds(TOURNAMENT_START).start, to: getEasternDayBounds(TOURNAMENT_END).end };
 }
 
+// LIKE patterns for the tournament season names (see TOURNAMENT_SEASON_NAMES).
+// Used as:  LOWER(COALESCE(program_name, '')) LIKE ANY($n)  with this array as $n.
+function tournamentProgramPatterns() {
+  return TOURNAMENT_SEASON_NAMES.map(n => '%' + n.toLowerCase().replace(/[\\%_]/g, '\\$&') + '%');
+}
+
 // [{ date: '2026-11-11', label: 'Wed' }, ...] for every day START..END inclusive.
 function tournamentDays() {
   const [y1, m1, d1] = TOURNAMENT_START.split('-').map(Number);
@@ -916,10 +933,10 @@ async function getTournamentTeams() {
   const [teamsResult, tiers] = await Promise.all([
     pool.query(`
       SELECT team_id, MAX(team_name) AS team_name, MAX(gender) AS gender, MAX(division_id) AS division_id FROM (
-        SELECT home_team_id AS team_id, home_team AS team_name, gender, division_id FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2
+        SELECT home_team_id AS team_id, home_team AS team_name, gender, division_id FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2 AND LOWER(COALESCE(program_name, '')) LIKE ANY($3)
         UNION ALL
-        SELECT away_team_id, away_team, gender, division_id FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2
-      ) t WHERE team_id IS NOT NULL GROUP BY team_id`, [b.from.toISOString(), b.to.toISOString()]),
+        SELECT away_team_id, away_team, gender, division_id FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2 AND LOWER(COALESCE(program_name, '')) LIKE ANY($3)
+      ) t WHERE team_id IS NOT NULL GROUP BY team_id`, [b.from.toISOString(), b.to.toISOString(), tournamentProgramPatterns()]),
     loadTournamentTierMap(),
   ]);
   return teamsResult.rows
@@ -1174,18 +1191,26 @@ const server = http.createServer(async (req, res) => {
       // division IDs get picked up: they appear here as soon as SportsEngine
       // games for them are synced.
       if (req.method === 'GET' && url.pathname === '/api/tournament/divisions') {
-        const [divResult, divTeamsResult, tiers] = await Promise.all([
+        const patterns = tournamentProgramPatterns();
+        const [divResult, divTeamsResult, programsResult, tiers] = await Promise.all([
           pool.query(`
             SELECT division_id, MAX(gender) AS gender, COUNT(*) AS games, MIN(start_time) AS first_game
             FROM schedule_games_cache
             WHERE start_time >= $1 AND start_time <= $2 AND division_id IS NOT NULL
-            GROUP BY division_id ORDER BY MAX(gender), division_id`, [fromIso, toIso]),
+              AND LOWER(COALESCE(program_name, '')) LIKE ANY($3)
+            GROUP BY division_id ORDER BY MAX(gender), division_id`, [fromIso, toIso, patterns]),
           pool.query(`
             SELECT DISTINCT division_id, team FROM (
-              SELECT division_id, home_team AS team FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2
+              SELECT division_id, home_team AS team FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2 AND LOWER(COALESCE(program_name, '')) LIKE ANY($3)
               UNION ALL
-              SELECT division_id, away_team FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2
-            ) t WHERE division_id IS NOT NULL AND team IS NOT NULL ORDER BY team`, [fromIso, toIso]),
+              SELECT division_id, away_team FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2 AND LOWER(COALESCE(program_name, '')) LIKE ANY($3)
+            ) t WHERE division_id IS NOT NULL AND team IS NOT NULL ORDER BY team`, [fromIso, toIso, patterns]),
+          // Every season/program name found on these dates and whether it is
+          // counted - lets the setup page show why a game is (not) included.
+          pool.query(`
+            SELECT program_name, COUNT(*) AS games, BOOL_OR(LOWER(COALESCE(program_name, '')) LIKE ANY($3)) AS matched
+            FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2
+            GROUP BY program_name ORDER BY BOOL_OR(LOWER(COALESCE(program_name, '')) LIKE ANY($3)) DESC, COUNT(*) DESC`, [fromIso, toIso, patterns]),
           loadTournamentTierMap(),
         ]);
         const sampleByDivision = new Map();
@@ -1205,7 +1230,11 @@ const server = http.createServer(async (req, res) => {
             season_name: (DIVISION_LOOKUP[d.division_id] && DIVISION_LOOKUP[d.division_id].name) || null,
             tier: tiers.get(d.division_id) || null,
           }));
-        return sendJson(200, { divisions });
+        return sendJson(200, {
+          divisions,
+          season_names: TOURNAMENT_SEASON_NAMES,
+          programs_in_window: programsResult.rows.map(r => ({ name: r.program_name, games: parseInt(r.games, 10), matched: !!r.matched })),
+        });
       }
 
       // PUT /api/tournament/divisions/:divisionId  Body: { tier: 'Gold'|'Silver'|'Bronze'|'Excluded'|null }
@@ -1545,10 +1574,26 @@ const server = http.createServer(async (req, res) => {
       // Read from our own local cache instead of live-fetching the
       // schedule monitor on every load - the cache is kept fresh by the
       // automatic background sync (see runAutomaticScheduleSync above).
-      const cacheResult = await pool.query(
-        'SELECT * FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2',
-        [rangeFrom.toISOString(), rangeTo.toISOString()]
-      );
+      // Tournament mode: league games are still played on these dates, so only
+      // games whose season is a tournament season are used. excludedGameIds =
+      // the in-window games that are NOT tournament games, so a stray report
+      // for one of them can't sneak back in via the "report not in cache" merge below.
+      const cacheResult = TOURNAMENT_MODE
+        ? await pool.query(
+            `SELECT * FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2
+               AND LOWER(COALESCE(program_name, '')) LIKE ANY($3)`,
+            [rangeFrom.toISOString(), rangeTo.toISOString(), tournamentProgramPatterns()])
+        : await pool.query(
+            'SELECT * FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2',
+            [rangeFrom.toISOString(), rangeTo.toISOString()]);
+      let excludedGameIds = new Set();
+      if (TOURNAMENT_MODE) {
+        const ex = await pool.query(
+          `SELECT game_id FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2
+             AND NOT (LOWER(COALESCE(program_name, '')) LIKE ANY($3))`,
+          [rangeFrom.toISOString(), rangeTo.toISOString(), tournamentProgramPatterns()]);
+        excludedGameIds = new Set(ex.rows.map(r => r.game_id));
+      }
       // SportsEngine's own score, kept SEPARATE from our own report score
       // deliberately - never merged into team1_score/team2_score, so the
       // two sources are never confused with each other on display.
@@ -1591,7 +1636,7 @@ const server = http.createServer(async (req, res) => {
       // drop a real report just because its schedule entry isn't cached.
       const mergedIds = new Set(mergedRows.map(r => r.game_id));
       for (const r of reportResult.rows) {
-        if (!mergedIds.has(r.game_id)) mergedRows.push(r);
+        if (!mergedIds.has(r.game_id) && !excludedGameIds.has(r.game_id)) mergedRows.push(r);
       }
 
       // Ozark (Men & Women) is excluded from Match Reports entirely - never
@@ -2045,6 +2090,12 @@ const server = http.createServer(async (req, res) => {
       const params = [eventTypes];
       let paramIdx = 2;
 
+      // Tournament mode: only cards/reports from tournament-season games (league
+      // games are still being played on these dates).
+      if (TOURNAMENT_MODE) {
+        conditions.push(`e.game_id IN (SELECT game_id FROM schedule_games_cache WHERE LOWER(COALESCE(program_name, '')) LIKE ANY($${paramIdx++}))`);
+        params.push(tournamentProgramPatterns());
+      }
       if (teamId) { conditions.push(`e.team_id = $${paramIdx++}`); params.push(teamId); }
       if (playerName) { conditions.push(`e.name ILIKE $${paramIdx++}`); params.push('%' + playerName + '%'); }
       if (dateFrom) { conditions.push(`s.game_date >= $${paramIdx++}`); params.push(dateFrom); }
@@ -2085,6 +2136,10 @@ const server = http.createServer(async (req, res) => {
       const incidentConditions = ['s.incident_report IS NOT NULL'];
       const incidentParams = [];
       let incidentParamIdx = 1;
+      if (TOURNAMENT_MODE) {
+        incidentConditions.push(`s.game_id IN (SELECT game_id FROM schedule_games_cache WHERE LOWER(COALESCE(program_name, '')) LIKE ANY($${incidentParamIdx++}))`);
+        incidentParams.push(tournamentProgramPatterns());
+      }
       if (dateFrom) { incidentConditions.push(`s.game_date >= $${incidentParamIdx++}`); incidentParams.push(dateFrom); }
       if (dateTo) { incidentConditions.push(`s.game_date <= $${incidentParamIdx++}`); incidentParams.push(dateTo); }
       if (reviewStatus === 'pending') { incidentConditions.push(`(ir.status IS NULL OR ir.status = 'pending')`); }

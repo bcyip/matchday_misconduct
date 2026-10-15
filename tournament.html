@@ -47,7 +47,8 @@
 
   <div class="card">
     <h2>1. Division tiers</h2>
-    <p class="muted" style="margin:0;">Every division with a game on the tournament dates appears here as soon as its games are scheduled in SportsEngine. Pick each one's tier (Men: Gold / Silver / Bronze, Women: Gold / Silver). Use <b>Not in tournament</b> for any other division that happens to play on these dates, and it will be hidden everywhere. Divisions left unassigned still show, under "Unassigned".</p>
+    <p class="muted" style="margin:0;">Every tournament division appears here as soon as its games are scheduled in SportsEngine. Pick each one's tier (Men: Gold / Silver / Bronze, Women: Gold / Silver). Divisions left unassigned still show, under "Unassigned". <b>Not in tournament</b> hides a division everywhere, if one ever slips in.</p>
+    <div id="seasonInfo" style="margin-top:12px;"></div>
     <div class="table-scroll"><div id="divisionsBox"><p class="muted">Loading...</p></div></div>
     <div class="msg" id="divisionsMsg"></div>
   </div>
@@ -125,9 +126,23 @@
   async function loadDivisions() {
     const box = document.getElementById('divisionsBox');
     try {
-      const { divisions } = await api('GET', '/api/tournament/divisions');
+      const { divisions, season_names, programs_in_window } = await api('GET', '/api/tournament/divisions');
+      // Only games from these SportsEngine seasons count as tournament games
+      // (league games are still being played on the same dates). The list of
+      // season names actually found on these dates shows why a game is or isn't counted.
+      const programs = programs_in_window || [];
+      const anyMatched = programs.some(p => p.matched);
+      document.getElementById('seasonInfo').innerHTML = `
+        <div style="background:${anyMatched || !programs.length ? 'var(--bg)' : '#FBEAE8'}; border:1px solid var(--border); border-radius:8px; padding:10px 12px; font-size:13px;">
+          <b>Only games in these seasons are shown anywhere in this app:</b> ${(season_names || []).map(n => '<span class="pill">' + esc(n) + '</span>').join(' ')}
+          ${!programs.length ? '<div class="muted" style="margin-top:6px;">No games from any season found on the tournament dates yet.</div>' : `
+          <div class="muted" style="margin-top:6px;">Seasons found on the tournament dates:
+            ${programs.map(p => `${p.matched ? '✓' : '✗'} ${esc(p.name || '(no season name yet)')} — ${p.games} game${p.games === 1 ? '' : 's'}`).join(' &nbsp;|&nbsp; ')}
+          </div>
+          ${anyMatched ? '' : '<div style="margin-top:6px; color:var(--danger);"><b>None of the seasons found match.</b> If the names above look right but spelled differently, tell whoever manages this app to set TOURNAMENT_SEASON_NAMES to match them exactly.</div>'}`}
+        </div>`;
       if (!divisions.length) {
-        box.innerHTML = '<p class="muted">No games found on the tournament dates yet. Divisions appear here once their games are scheduled in SportsEngine and synced (the sync runs every few minutes).</p>';
+        box.innerHTML = '<p class="muted">No tournament games found on the tournament dates yet. Divisions appear here once their games are scheduled in SportsEngine and synced (the sync runs every 15 minutes).</p>';
         return;
       }
       box.innerHTML = `<table>
