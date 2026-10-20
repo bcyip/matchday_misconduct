@@ -492,6 +492,15 @@
     return '#FBEAE8';
   }
 
+  // Officials count + crew-change answer submitted on the matchday report form.
+  function crewInfoHtml(r) {
+    if (!r.has_report || r.is_forfeit) return '';
+    if (r.officials_present == null && r.crew_changes_needed == null) return '';
+    const off = r.officials_present != null ? r.officials_present : '—';
+    const crew = r.crew_changes_needed ? '<b style="color:var(--danger);">Yes</b>' : 'No';
+    return `<div class="muted" style="font-size:11.5px; margin-bottom:4px; white-space:nowrap;">Officials: <b>${off}</b> &middot; Crew change: ${crew}</div>`;
+  }
+
   function reasonLabelFor(r) {
     return r.forfeit_reason ? r.forfeit_reason.charAt(0).toUpperCase() + r.forfeit_reason.slice(1) : null;
   }
@@ -667,13 +676,15 @@
       `;
     }
     if (r.has_report) {
+      const crew = crewInfoHtml(r);
       // Push Score to SE is left out of the compact (mobile) actions -
       // that's a desktop-workflow action, kept only in the table's Actions
       // column. (View Incident Report is left out here too: it toggles a
       // row that lives inside the table, which is hidden on mobile, so it
       // wouldn't actually show anything.)
-      if (compact && !TOURNAMENT) return '';
+      if (compact && !TOURNAMENT) return crew;
       return `
+        ${crew}
         <button class="push-score-btn" onclick="pushScore('${escapeJs(r.game_id)}', this)">Push Score to SE</button>
         <span class="push-score-result" style="display:block; font-size:11px; margin-top:3px;"></span>
         ${r.incident_report ? `<button class="push-score-btn" style="margin-top:4px;" onclick="toggleIncidentReport('${escapeJs(r.game_id)}')">View Incident Report</button>` : ''}
@@ -683,11 +694,6 @@
       return `
         <div style="display:flex; align-items:center; justify-content:center; gap:6px; flex-wrap:wrap;">
           <span class="muted">${isUpcoming(r) ? 'Upcoming' : 'No USCCS Report'}</span>
-          <span class="muted">|</span>
-          <label style="display:flex; align-items:center; gap:4px; font-weight:400; cursor:pointer;">
-            <input type="checkbox" ${r.se_manual_entry ? 'checked' : ''} onchange="toggleSeManualEntryFlag('${escapeJs(r.game_id)}', this.checked)" />
-            SE manual score entry
-          </label>
           <span class="muted">|</span>
           <select onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.value)" style="font-size:11px; padding:2px 4px; border:1px solid var(--border); border-radius:5px;">
             <option value="" selected>Forfeit/Postponed/Abandoned?</option>
@@ -702,10 +708,6 @@
     return `
       <span class="muted" style="font-size:12px; display:block;">${isUpcoming(r) ? 'Upcoming' : 'No USCCS Report'}</span>
       ${previousForfeitNoteHtml(r)}
-      <label style="display:flex; align-items:center; gap:5px; font-size:11.5px; font-weight:400; margin-top:4px; cursor:pointer;">
-        <input type="checkbox" ${r.se_manual_entry ? 'checked' : ''} onchange="toggleSeManualEntryFlag('${escapeJs(r.game_id)}', this.checked)" />
-        SE manual score entry
-      </label>
       <select onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.value)" style="font-size:11.5px; padding:3px 5px; margin-top:4px; border:1px solid var(--border); border-radius:5px;">
         <option value="" selected>Forfeit/Postponed/Abandoned?</option>
         <option value="forfeit">Forfeit</option>

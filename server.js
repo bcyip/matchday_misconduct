@@ -1518,6 +1518,7 @@ const server = http.createServer(async (req, res) => {
       const reportResult = await pool.query(`
         SELECT
           mrs.game_id, mrs.game_date, mrs.division_id, mrs.gender, mrs.incident_report,
+          mrs.officials_present, mrs.crew_changes_needed,
           mrs.team1_id, mrs.team1_name, mrs.team1_score,
           mrs.team2_id, mrs.team2_name, mrs.team2_score,
           mrs.submitted_at,
@@ -1702,6 +1703,9 @@ const server = http.createServer(async (req, res) => {
           // flag tracking that a score was typed directly into SportsEngine,
           // decoupled from whether the MO report itself has been reviewed.
           se_manual_entry: seManualEntryIds.has(r.game_id),
+          // Submitted from matchday on the match report form.
+          officials_present: r.officials_present != null ? r.officials_present : null,
+          crew_changes_needed: r.crew_changes_needed != null ? r.crew_changes_needed : null,
           is_forfeit: isForfeit,
           previous_forfeit: isStaleForfeit ? { reason: rawForfeitInfo.reason, original_start_time: rawForfeitInfo.game_start_time } : null,
           forfeit_reason: forfeitReason, // 'forfeit' | 'postponed' | 'abandoned' | null
