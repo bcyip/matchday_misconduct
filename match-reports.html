@@ -616,7 +616,7 @@
     if (!r.forfeit_notes) return '';
     const label = reasonLabelFor(r) || 'Forfeit';
     return `
-      <button onclick="openForfeitDetailsModal('${escapeJs(r.game_id)}')" style="display:block; width:100%; text-align:left; margin-top:${compact ? '6' : '8'}px; padding:7px 10px; background:#fff; border:1px solid var(--border); border-radius:6px; font-size:${compact ? '11' : '11.5'}px; cursor:pointer; font-family:inherit;">
+      <button onclick="openForfeitDetailsModal('${escapeJs(r.game_id)}')" style="display:block; width:100%; max-width:230px; box-sizing:border-box; overflow:hidden; text-align:left; margin-top:${compact ? '6' : '8'}px; padding:7px 10px; background:#fff; border:1px solid var(--border); border-radius:6px; font-size:${compact ? '11' : '11.5'}px; cursor:pointer; font-family:inherit;">
         <strong>📋 ${escapeHtml(label)}</strong>
         <div class="muted" style="margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(r.forfeit_notes)}</div>
       </button>
