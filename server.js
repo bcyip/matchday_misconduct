@@ -1573,7 +1573,7 @@ const server = http.createServer(async (req, res) => {
         pool.query('SELECT game_id, reason, referee_paid, charge_status, notes, game_start_time FROM forfeit_flags'),
         reportedGameIds.length > 0
           ? pool.query(
-              `SELECT game_id, team_id, team_name, person_type, name, event_type, minute, reason
+              `SELECT game_id, team_id, team_name, person_type, name, event_type, minute, reason, supplemental_report
                FROM match_report_entries WHERE game_id = ANY($1)
                ORDER BY minute ASC NULLS LAST`,
               [reportedGameIds]

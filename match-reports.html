@@ -846,12 +846,20 @@
     // mode, where the Actions and Officials / Crew columns are hidden - the
     // officials / crew-change answers and the manual Push Score to SE button.
     const hasDesc = !!(r.incident_report && r.incident_report.trim());
+    // Written explanations attached to individual cards (supplemental reports).
+    const suppl = (r.entries || []).filter(e => e.supplemental_report && e.supplemental_report.trim());
+    const supplHtml = suppl.map(e => `
+      <div style="margin-top:8px; font-size:13px;">
+        <strong>${e.event_type === 'Red Card' ? '🟥' : '🟨'} ${escapeHtml(e.name)}${e.minute != null ? " (" + e.minute + "')" : ''}</strong>
+        <span class="muted" style="font-size:12px;"> — ${escapeHtml(e.team_name || '')}</span>
+        <div style="white-space:pre-wrap; margin-top:2px;">${escapeHtml(e.supplemental_report)}</div>
+      </div>`).join('');
     document.getElementById('boxScoreExtra').innerHTML = `
       <div style="margin-top:16px; border-top:1px solid var(--border); padding-top:12px;">
         <h4 style="font-size:12px; text-transform:uppercase; color:var(--gray); margin:0 0 6px;">Report Description</h4>
-        ${hasDesc
-          ? `<div style="white-space:pre-wrap; font-size:13.5px;">${escapeHtml(r.incident_report)}</div>`
-          : '<p class="muted" style="margin:0; font-size:12.5px;">No report description submitted.</p>'}
+        ${hasDesc ? `<div style="white-space:pre-wrap; font-size:13.5px;">${escapeHtml(r.incident_report)}</div>` : ''}
+        ${supplHtml}
+        ${(!hasDesc && !suppl.length) ? '<p class="muted" style="margin:0; font-size:12.5px;">No report description submitted.</p>' : ''}
       </div>
       ${TOURNAMENT ? `
         <div style="margin-top:14px;">${crewInfoHtml(r)}</div>
