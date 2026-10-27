@@ -968,9 +968,13 @@
     const teamId = teamIdFor(r, side);
     const kits = (teamId && kitsByTeam[teamId]) || {};
     const a = assignmentFor(r, side);
-    const colors = mixedKitColors(kits, side, 'out', part => a['out_' + part]);
-    if (!(colors.jersey_color || colors.shorts_color || colors.socks_color)) return '';
-    return `<span class="mini-kit" title="Outfield kit as worn - click for all kits" onclick="openKitsModal('${escapeJs(r.game_id)}')">${kitSvg(colors)}</span>`;
+    const mini = (group, title) => {
+      const colors = mixedKitColors(kits, side, group, part => a[group + '_' + part]);
+      if (!(colors.jersey_color || colors.shorts_color || colors.socks_color)) return '';
+      return `<span class="mini-kit" title="${title} - click for all kits" onclick="openKitsModal('${escapeJs(r.game_id)}')">${kitSvg(colors)}</span>`;
+    };
+    // Outfield kit, then the goalkeeper kit (each only if it has any colors set).
+    return mini('out', 'Outfield kit as worn') + mini('gk', 'Goalkeeper kit as worn');
   }
 
   // One selectable option (e.g. "Home jersey"): the part's photo if there is one, else a color swatch.
