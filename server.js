@@ -1711,7 +1711,12 @@ const server = http.createServer(async (req, res) => {
         const isForfeit = forfeitReason != null;
         return {
           ...r,
-          division_name: r.division_id ? ((DIVISION_LOOKUP[r.division_id] && DIVISION_LOOKUP[r.division_id].name) || r.division_id) : null,
+          // Tournament divisions aren't in DIVISION_LOOKUP (season divisions only), so
+          // show the tier instead of the raw ID: "Gold", "Silver", "Bronze".
+          division_name: r.division_id
+            ? ((DIVISION_LOOKUP[r.division_id] && DIVISION_LOOKUP[r.division_id].name)
+               || (tierMap && tierMap.get(r.division_id) && tierMap.get(r.division_id) !== 'Excluded' ? tierMap.get(r.division_id) : r.division_id))
+            : null,
           tier: tierMap ? (tierMap.get(r.division_id) || null) : null, // tournament mode: Gold | Silver | Bronze | null
           game_status: gameStatusByGameId.get(r.game_id) || null,
           // "MO report reviewed" (renamed from "MO report received") - a
