@@ -899,6 +899,25 @@ async function ensureTournamentTables() {
   } catch (err) {
     console.error('[tournament] Could not ensure tournament_division_tiers table exists:', err.message);
   }
+  // Known tournament divisions (SportsEngine division ID -> tier). Inserted only
+  // if the division has no tier yet, so anything changed on the Tournament Setup
+  // page is never overwritten.
+  const KNOWN_TIERS = [
+    ['6ad01142a001fc44c0b7bc69', 'Gold'],   // Men Gold
+    ['6ad011420f1fad0c0d0ab9d3', 'Silver'], // Men Silver
+    ['6ad01142c0a37291f3200d03', 'Bronze'], // Men Bronze
+    ['6ad10be2fe14fed213609c04', 'Gold'],   // Women Gold
+    ['6ad10be26a5ea55008763ae3', 'Silver'], // Women Silver
+  ];
+  try {
+    for (const [id, tier] of KNOWN_TIERS) {
+      await pool.query(
+        `INSERT INTO tournament_division_tiers (division_id, tier, updated_by) VALUES ($1, $2, 'preset') ON CONFLICT (division_id) DO NOTHING`,
+        [id, tier]);
+    }
+  } catch (err) {
+    console.error('[tournament] Could not seed known division tiers:', err.message);
+  }
   // Manually entered (rolled-over) suspensions live in the existing
   // suspensions table, so matchday's suspended-player flag, its check-in block
   // and the games-served countdown all work on them with no further changes.
