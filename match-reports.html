@@ -60,7 +60,8 @@
     .mr-card-actions .push-score-btn { padding: 4px 9px; font-size: 11.5px; }
 
     /* Team kits - tiny kit icon beside team names, and the kits modal. */
-    .mini-kit { display: inline-block; cursor: pointer; vertical-align: middle; margin: 0 5px; line-height: 0; }
+    .mini-kit { display: inline-flex; flex-direction: column; align-items: center; cursor: pointer; vertical-align: middle; margin: 0 4px; line-height: 0; }
+    .mini-kit-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .02em; color: var(--gray); line-height: 1; margin-top: 2px; }
     .mini-kit svg { height: 22px; width: auto; }
     .kits-link { font-size: 11px; font-weight: 600; color: var(--navy); }
     .kits-modal { max-width: 860px; }
@@ -968,13 +969,13 @@
     const teamId = teamIdFor(r, side);
     const kits = (teamId && kitsByTeam[teamId]) || {};
     const a = assignmentFor(r, side);
-    const mini = (group, title) => {
+    const mini = (group, title, label) => {
       const colors = mixedKitColors(kits, side, group, part => a[group + '_' + part]);
       if (!(colors.jersey_color || colors.shorts_color || colors.socks_color)) return '';
-      return `<span class="mini-kit" title="${title} - click for all kits" onclick="openKitsModal('${escapeJs(r.game_id)}')">${kitSvg(colors)}</span>`;
+      return `<span class="mini-kit" title="${title} - click for all kits" onclick="openKitsModal('${escapeJs(r.game_id)}')">${kitSvg(colors)}<span class="mini-kit-label">${label}</span></span>`;
     };
     // Outfield kit, then the goalkeeper kit (each only if it has any colors set).
-    return mini('out', 'Outfield kit as worn') + mini('gk', 'Goalkeeper kit as worn');
+    return mini('out', 'Team kit as worn', 'Team') + mini('gk', 'Goalkeeper kit as worn', 'GK');
   }
 
   // One selectable option (e.g. "Home jersey"): the part's photo if there is one, else a color swatch.
