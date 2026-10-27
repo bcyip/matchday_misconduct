@@ -83,6 +83,8 @@
         <select id="showFilter" onchange="renderTeams()">
           <option value="all">All teams</option>
           <option value="incomplete">Missing kit info</option>
+          <option value="partial">Partially set</option>
+          <option value="none">Nothing set</option>
           <option value="complete">Complete</option>
         </select></div>
     </div>
@@ -149,6 +151,9 @@
   }
 
     function kitIsComplete(k) { return !!(k && k.jersey_color && k.shorts_color && k.socks_color); }
+  function kitHasAny(k) { return !!(k && (k.jersey_color || k.shorts_color || k.socks_color || k.jersey_image_url || k.shorts_image_url || k.socks_image_url)); }
+  // Partial = something is set (any color or photo on any kit) but not all 4 kits are fully set.
+  function teamHasAnyKitInfo(t) { return KIT_TYPES.some(kt => kitHasAny(t.kits[kt])); }
   function teamKitCount(t) { return KIT_TYPES.filter(kt => kitIsComplete(t.kits[kt])).length; }
 
   function colorsSummaryHtml(k) {
@@ -182,10 +187,14 @@
       (!q || (t.team_name || '').toLowerCase().includes(q)) &&
       (!conf || t.conference === conf) &&
       (!gender || t.gender === gender) &&
-      (show === 'all' || (show === 'complete') === (teamKitCount(t) === 4)));
+      (show === 'all'
+        || (show === 'complete' && teamKitCount(t) === 4)
+        || (show === 'incomplete' && teamKitCount(t) !== 4)
+        || (show === 'partial' && teamKitCount(t) !== 4 && teamHasAnyKitInfo(t))
+        || (show === 'none' && !teamHasAnyKitInfo(t))));
     const completeTotal = teams.filter(t => teamKitCount(t) === 4).length;
     document.getElementById('summaryLine').textContent =
-      `${list.length} of ${teams.length} teams shown · ${completeTotal} teams have all 4 kits fully set.`;
+      `${list.length} of ${teams.length} teams shown · ${completeTotal} teams have all 4 kits fully set · ${teams.filter(t => teamKitCount(t) !== 4 && teamHasAnyKitInfo(t)).length} partially set.`;
     document.getElementById('teamsBox').innerHTML = list.length ? list.map(t => {
       const n = teamKitCount(t);
       return `<div class="team-card">
