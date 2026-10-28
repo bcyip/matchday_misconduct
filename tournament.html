@@ -61,7 +61,7 @@
     <div class="table-scroll"><div id="suspensionsBox"><p class="muted">Loading...</p></div></div>
 
     <h3>Suspensions still open from the season</h3>
-    <p class="muted" style="margin:0;">Matched to the same school's tournament team by name and gender. Check the games remaining, then add.</p>
+    <p class="muted" style="margin:0;">For reference only: season suspensions that still have games left, matched to the same school's tournament team by name and gender. Suspensions can only be added to someone who is on a tournament team's roster in SportsEngine - use <b>Select in form</b> to pick the player from that roster below.</p>
     <div class="table-scroll"><div id="candidatesBox"><p class="muted">Loading...</p></div></div>
 
     <h3>Add one manually</h3>
@@ -71,13 +71,9 @@
         <select id="mTeam" onchange="onManualTeamChange()" style="min-width:230px;"><option value="">Select a team...</option></select>
       </div>
       <div class="field">
-        <label for="mPerson">Player / staff (from the SportsEngine roster)</label>
+        <label for="mPerson">Player / staff (from the team's SportsEngine roster)</label>
         <select id="mPerson" style="min-width:260px;" disabled><option value="">Select a team first</option></select>
       </div>
-    </div>
-    <div class="form-row" id="mTypedRow" style="display:none;">
-      <div class="field"><label for="mName">Name</label><input type="text" id="mName" placeholder="Player name" /></div>
-      <div class="field"><label for="mProfile">SportsEngine profile ID</label><input type="text" id="mProfile" placeholder="Needed to flag them in Matchday" /></div>
     </div>
     <div class="form-row">
       <div class="field"><label for="mGames">Games remaining</label><input type="number" id="mGames" min="1" max="20" value="1" /></div>
@@ -205,34 +201,35 @@
         <tr><th>Player</th><th>Season team</th><th>Games left</th><th>Tournament team</th><th></th></tr>
         ${candidates.map((c, i) => `<tr>
           <td>${esc(c.player_name)}</td><td>${esc(c.season_team_name)}</td>
-          <td><input type="number" min="1" max="20" value="${c.remaining}" id="cg${i}" /></td>
-          <td>${c.tournament_team ? esc(c.tournament_team.team_name) : `<select id="ct${i}"><option value="">Pick team...</option>${teamOptions()}</select>`}</td>
-          <td>${c.already_added ? '<span class="pill">Added</span>' : `<button class="primary" onclick="addCandidate(${i}, this)">Add</button>`}</td></tr>`).join('')}
+          <td>${esc(c.remaining)}</td>
+          <td>${c.tournament_team ? esc(c.tournament_team.team_name) : '<span class="muted">No matching tournament team</span>'}</td>
+          <td>${c.already_added ? '<span class="pill">Added</span>' : (c.tournament_team ? `<button onclick="selectCandidate(${i})">Select in form</button>` : '')}</td></tr>`).join('')}
       </table>`;
     } catch (e) { box.innerHTML = '<p class="msg err">' + esc(e.message) + '</p>'; }
   }
   function teamOptions() {
     return tournamentTeams.map(t => `<option value="${esc(t.team_id)}">${esc(t.team_name)}${t.gender ? ' (' + esc(t.gender) + ')' : ''}</option>`).join('');
   }
-  async function addCandidate(i, btn) {
+  // Pre-fills the "Add one manually" form from a season suspension: picks the
+  // matched tournament team, then the person from that team's SportsEngine
+  // roster (matched on profile ID). Nothing is added until "Add suspension".
+  async function selectCandidate(i) {
     const c = candidates[i];
-    let team = c.tournament_team;
-    if (!team) {
-      const id = document.getElementById('ct' + i).value;
-      const t = tournamentTeams.find(x => x.team_id === id);
-      if (!t) { setMsg('suspensionsMsg', 'Pick the tournament team for ' + c.player_name + ' first.', 'err'); return; }
-      team = { team_id: t.team_id, team_name: t.team_name };
+    const teamSel = document.getElementById('mTeam');
+    teamSel.value = c.tournament_team.team_id;
+    await onManualTeamChange();
+    const personSel = document.getElementById('mPerson');
+    const opt = [...personSel.options].find(o => String(o.value) === String(c.profile_id));
+    document.getElementById('mTeam').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (!opt) {
+      personSel.value = '';
+      setMsg('suspensionsMsg', c.player_name + ' is not on the ' + c.tournament_team.team_name + ' tournament roster in SportsEngine, so a suspension cannot be added until they are rostered.', 'err');
+      return;
     }
-    btn.disabled = true;
-    try {
-      await api('POST', '/api/tournament/suspensions', {
-        team_id: team.team_id, team_name: team.team_name, player_name: c.player_name, profile_id: c.profile_id,
-        games_remaining: document.getElementById('cg' + i).value,
-        note: 'Rolled over from ' + c.season_team_name + ' (season)',
-      });
-      setMsg('suspensionsMsg', 'Added ' + c.player_name + '.', 'ok');
-      loadSuspensions(); loadCandidates();
-    } catch (e) { setMsg('suspensionsMsg', e.message, 'err'); btn.disabled = false; }
+    personSel.value = opt.value;
+    document.getElementById('mGames').value = c.remaining;
+    document.getElementById('mNote').value = 'Rolled over from ' + c.season_team_name + ' (season)';
+    setMsg('suspensionsMsg', 'Selected ' + c.player_name + ' - check the games remaining, then Add suspension.', 'ok');
   }
 
   async function loadTeams() {
@@ -249,26 +246,21 @@
   async function onManualTeamChange() {
     const teamId = document.getElementById('mTeam').value;
     const personSel = document.getElementById('mPerson');
-    document.getElementById('mTypedRow').style.display = 'none';
     if (!teamId) { personSel.disabled = true; personSel.innerHTML = '<option value="">Select a team first</option>'; return; }
     personSel.disabled = true;
     personSel.innerHTML = '<option value="">Loading roster...</option>';
     try {
       const { people } = await api('GET', '/api/tournament/roster?teamId=' + encodeURIComponent(teamId));
       if (!people.length) {
-        personSel.innerHTML = '<option value="">No roster found</option>';
-        document.getElementById('mTypedRow').style.display = 'flex'; // fall back to typing name + profile ID
+        personSel.innerHTML = '<option value="">No one is on this roster yet</option>';
         return;
       }
       personSel.innerHTML = '<option value="">Select...</option>' +
-        people.map(p => `<option value="${esc(p.profile_id)}" data-name="${esc(p.name)}">${esc(p.name)}${p.jersey ? ' #' + esc(p.jersey) : ''} — ${esc(p.role)}</option>`).join('') +
-        '<option value="__typed__">Not listed — type name and profile ID</option>';
+        people.map(p => `<option value="${esc(p.profile_id)}" data-name="${esc(p.name)}">${esc(p.name)}${p.jersey ? ' #' + esc(p.jersey) : ''} — ${esc(p.role)}</option>`).join('');
       personSel.disabled = false;
-      personSel.onchange = () => { document.getElementById('mTypedRow').style.display = personSel.value === '__typed__' ? 'flex' : 'none'; };
     } catch (e) {
       personSel.innerHTML = '<option value="">Could not load roster</option>';
-      document.getElementById('mTypedRow').style.display = 'flex';
-      setMsg('suspensionsMsg', 'Could not load the roster (' + e.message + '). You can type the name and profile ID instead.', 'err');
+      setMsg('suspensionsMsg', 'Could not load the roster (' + e.message + '). Try again in a moment.', 'err');
     }
   }
 
@@ -277,16 +269,10 @@
     const team = tournamentTeams.find(t => t.team_id === teamSel.value);
     if (!team) { setMsg('suspensionsMsg', 'Select a tournament team.', 'err'); return; }
     const personSel = document.getElementById('mPerson');
-    let name, profile;
-    if (document.getElementById('mTypedRow').style.display !== 'none') {
-      name = document.getElementById('mName').value.trim();
-      profile = document.getElementById('mProfile').value.trim();
-    } else {
-      const opt = personSel.options[personSel.selectedIndex];
-      profile = personSel.value;
-      name = opt && opt.getAttribute('data-name');
-    }
-    if (!name || !profile || profile === '__typed__') { setMsg('suspensionsMsg', 'Choose a person from the roster, or type their name and profile ID.', 'err'); return; }
+    const opt = personSel.options[personSel.selectedIndex];
+    const profile = personSel.value;
+    const name = opt && opt.getAttribute('data-name');
+    if (!name || !profile) { setMsg('suspensionsMsg', 'Choose a person from the team roster.', 'err'); return; }
     const btn = document.getElementById('mAddBtn');
     btn.disabled = true;
     try {
@@ -296,8 +282,6 @@
       });
       setMsg('suspensionsMsg', 'Added ' + name + '.', 'ok');
       document.getElementById('mNote').value = '';
-      document.getElementById('mName').value = '';
-      document.getElementById('mProfile').value = '';
       loadSuspensions(); loadCandidates();
     } catch (e) { setMsg('suspensionsMsg', e.message, 'err'); }
     btn.disabled = false;

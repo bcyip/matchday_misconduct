@@ -1329,6 +1329,14 @@ const server = http.createServer(async (req, res) => {
         const games = parseInt(p.games_remaining, 10);
         if (!p.team_id || !p.team_name || !p.player_name || !p.profile_id) return sendJson(400, { error: 'Team, player and SportsEngine profile ID are all required.' });
         if (!Number.isInteger(games) || games < 1 || games > 20) return sendJson(400, { error: 'Games remaining must be a whole number from 1 to 20.' });
+        // Only someone who is on this team's SportsEngine roster right now can be added.
+        const rosterData = await callSeGraphQLWithRetry(`
+          query Team($id: String!) {
+            team(id: $id) { id players { profileId } staff { profileId } }
+          }`, { id: p.team_id });
+        const rosterTeam = (rosterData && rosterData.team) || {};
+        const onRoster = [...(rosterTeam.players || []), ...(rosterTeam.staff || [])].some(x => String(x.profileId) === String(p.profile_id));
+        if (!onRoster) return sendJson(400, { error: p.player_name + ' is not on the ' + p.team_name + ' roster in SportsEngine. Suspensions can only be added to rostered players.' });
         const dup = await pool.query(`SELECT 1 FROM suspensions WHERE source = 'tournament_rollover' AND team_id = $1 AND profile_id = $2`, [p.team_id, String(p.profile_id)]);
         if (dup.rowCount > 0) return sendJson(409, { error: p.player_name + ' already has a rolled-over suspension on this team. Delete it first to re-enter it.' });
         // Games count toward serving only if played AFTER this moment.
