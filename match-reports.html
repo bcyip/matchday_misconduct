@@ -132,6 +132,7 @@
       <div class="tbar-row"><span class="tbar-label">Day</span><div class="seg" id="tDayButtons"></div></div>
       <div class="tbar-row"><span class="tbar-label">Gender</span><div class="seg" id="tGenderButtons"></div></div>
       <div class="tbar-row"><span class="tbar-label">Division</span><div class="seg" id="tTierButtons"></div></div>
+      <div class="tbar-row"><span class="tbar-label">Export</span><div class="seg"><button type="button" onclick="exportShownCsv()">Export CSV (games shown)</button></div></div>
       <div class="tbar-row"><span class="tbar-label">Public scores</span>
         <div class="seg"><button type="button" onclick="setShownScoresVisibility(true)">Make all shown Live</button><button type="button" onclick="setShownScoresVisibility(false)">Set all shown to Draft</button></div>
         <span class="muted" style="font-size:12px;">Draft scores stay hidden on the public schedule and standings.</span></div>
@@ -341,6 +342,7 @@
     // The "MO report reviewed" flag (flagged_external) is no longer shown or
     // editable in the UI; it is still stored in the db and returned by the API.
     else if (status === 'no_report_registered') filtered = baseRows.filter(r => !r.has_report && !isUpcoming(r));
+    shownReports = filtered;
     renderSummaryStats(baseRows);
     renderReports(filtered);
   }
@@ -378,6 +380,32 @@
     if (tSel.gender === 'Women' && tSel.tier === 'Bronze') tSel.tier = '';
     renderTournamentBar();
     applyReportFilterAndRender();
+  }
+
+  let shownReports = [];
+
+  // Tournament mode: download the games currently shown (day / gender / division / Show filters) as a CSV:
+  // match report link, date, time, location, teams, division, gender. Dates and times are Eastern.
+  function exportShownCsv() {
+    const rows = shownReports.slice().sort((a, b) => new Date(a.game_date || 0) - new Date(b.game_date || 0));
+    if (!rows.length) { alert('No games in the current view to export.'); return; }
+    const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const lines = [['Match Report URL', 'Date', 'Time (ET)', 'Location', 'Team 1 (Home)', 'Team 2 (Away)', 'Division', 'Gender'].map(q).join(',')];
+    for (const r of rows) {
+      const d = r.game_date ? new Date(r.game_date) : null;
+      lines.push([
+        r.game_id ? 'https://octopus-app-ilp92.ondigitalocean.app/?game=' + encodeURIComponent(r.game_id) : '',
+        d ? d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) : '',
+        d ? d.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' }) : '',
+        r.location_name || '', r.team1_name || '', r.team2_name || '', r.division_name || '', r.gender || '',
+      ].map(q).join(','));
+    }
+    const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'match-reports-' + new Date().toISOString().slice(0, 10) + '.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
 
   function renderTournamentBar() {
