@@ -741,6 +741,17 @@ const OZARK_KIT_EXCLUDED_DIVISIONS = ['6a4e96e46b8d1e01201ee2ce', '6a4e9b904b609
 async function ensureScoreEditColumns() {
   try {
     await pool.query(`ALTER TABLE match_report_scores ADD COLUMN IF NOT EXISTS score_edited_by TEXT, ADD COLUMN IF NOT EXISTS score_edited_at TIMESTAMPTZ`);
+    // A score an admin enters for a game that has NO submitted match report yet. Deliberately NOT
+    // a match_report_scores row: that would count as a submitted report (blocking matchday's
+    // report form and counting as a game served for suspensions). Used only until a report exists.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS manual_game_scores (
+        game_id TEXT PRIMARY KEY,
+        home_score INTEGER NOT NULL,
+        away_score INTEGER NOT NULL,
+        entered_by TEXT,
+        entered_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`);
   } catch (err) {
     console.error('[match-reports] Could not add score_edited_* columns:', err.message);
   }
@@ -1636,6 +1647,13 @@ const server = http.createServer(async (req, res) => {
         entriesByGameId.get(e.game_id).push(e);
       }
 
+      // Admin-entered scores for games with no submitted report yet.
+      let manualByGameId = new Map();
+      try {
+        const mr = await pool.query('SELECT game_id, home_score, away_score, entered_by, entered_at FROM manual_game_scores');
+        manualByGameId = new Map(mr.rows.map(x => [x.game_id, x]));
+      } catch (err) { console.error('[match-reports] Could not read manual_game_scores:', err.message); }
+
       // Tournament mode: which games' scores are Live on the public page.
       let publishedIds = new Set();
       if (TOURNAMENT_MODE) {
@@ -1779,6 +1797,9 @@ const server = http.createServer(async (req, res) => {
           // purely manual, admin-entered flag. Never auto-set from a
           // SportsEngine score (see runScheduleSyncForRange).
           flagged_external: flaggedIds.has(r.game_id),
+          manual_score: (!(r.team1_score != null || r.team2_score != null) && manualByGameId.has(r.game_id))
+            ? { home: manualByGameId.get(r.game_id).home_score, away: manualByGameId.get(r.game_id).away_score,
+                by: manualByGameId.get(r.game_id).entered_by, at: manualByGameId.get(r.game_id).entered_at } : null,
           score_edited_by: r.score_edited_by || null,
           score_edited_at: r.score_edited_at || null,
           score_published: publishedIds.has(r.game_id), // tournament: score is Live on the public page
@@ -2107,6 +2128,21 @@ const server = http.createServer(async (req, res) => {
   // deliberately left untouched (so a score can be fixed without redoing scorers).
   // Cards, suspensions and the report itself are not changed either. This does NOT
   // push to SportsEngine - use Push Score to SE afterwards if that is wanted.
+  // POST /api/match-reports/:gameId/clear-manual-score - removes a manual score (games with no report only).
+  const clearManualMatch = url.pathname.match(/^\/api\/match-reports\/([^/]+)\/clear-manual-score$/);
+  if (req.method === 'POST' && clearManualMatch) {
+    const session = await getSession(cookies.admin_session);
+    if (!session) { res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'Not logged in' })); }
+    try {
+      await pool.query('DELETE FROM manual_game_scores WHERE game_id = $1', [decodeURIComponent(clearManualMatch[1])]);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
   const setScoreMatch = url.pathname.match(/^\/api\/match-reports\/([^/]+)\/set-score$/);
   if (req.method === 'POST' && setScoreMatch) {
     const session = await getSession(cookies.admin_session);
@@ -2126,7 +2162,18 @@ const server = http.createServer(async (req, res) => {
         `UPDATE match_report_scores SET team1_score = $2, team2_score = $3, score_edited_by = $4, score_edited_at = now()
           WHERE game_id = $1 RETURNING team1_score, team2_score, score_edited_by, score_edited_at`,
         [gameId, s1, s2, session.name || session.email || null]);
-      if (r.rowCount === 0) return sendJson2(404, { error: 'No submitted report for this game, so there is no score to edit.' });
+      if (r.rowCount === 0) {
+        // No submitted report: keep the score as a manual score (home = team 1, away = team 2 as listed in Match Reports).
+        const g = await pool.query('SELECT 1 FROM schedule_games_cache WHERE game_id = $1', [gameId]);
+        if (g.rowCount === 0) return sendJson2(404, { error: 'Game not found in the schedule.' });
+        const m = await pool.query(
+          `INSERT INTO manual_game_scores (game_id, home_score, away_score, entered_by, entered_at) VALUES ($1, $2, $3, $4, now())
+           ON CONFLICT (game_id) DO UPDATE SET home_score = EXCLUDED.home_score, away_score = EXCLUDED.away_score, entered_by = EXCLUDED.entered_by, entered_at = now()
+           RETURNING home_score, away_score, entered_by, entered_at`,
+          [gameId, s1, s2, session.name || session.email || null]);
+        console.log(`[match-reports] ${session.name || session.email} entered manual score for ${gameId}: ${s1}-${s2}`);
+        return sendJson2(200, { ok: true, manual: true, home: m.rows[0].home_score, away: m.rows[0].away_score, by: m.rows[0].entered_by, at: m.rows[0].entered_at });
+      }
       console.log(`[match-reports] ${session.name || session.email} set score for ${gameId} to ${s1}-${s2}`);
       return sendJson2(200, { ok: true, ...r.rows[0] });
     } catch (err) {
