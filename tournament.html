@@ -84,7 +84,14 @@
   </div>
 
   <div class="card">
-    <h2>3. Team kits</h2>
+    <h2>3. Groups</h2>
+    <p class="muted" style="margin:0 0 8px;">Choose which group each team is in. The public schedule uses these groups. A division with no groups saved here falls back to guessing from the schedule, so save each division once it looks right. Groups follow the team, so they survive a team being renamed; a team swapped in with a new ID takes the group of the teams it plays once two of its opponents are in the same group (you can also reassign it here).</p>
+    <div id="groupsBox"><p class="muted">Loading...</p></div>
+    <div class="msg" id="groupsMsg"></div>
+  </div>
+
+  <div class="card">
+    <h2>4. Team kits</h2>
     <p class="muted" style="margin:0;">Tournament teams have new team IDs, so their kits are copied automatically from the season team with the same name and gender (after each schedule sync). A team that already has its own kit entries is never changed. Run it now after new teams are scheduled:</p>
     <div class="form-row"><button onclick="importKits(this)">Copy season kits to tournament teams now</button></div>
     <div class="msg" id="kitsMsg"></div>
@@ -288,6 +295,66 @@
   }
 
   // ---- 3. Kits ----------------------------------------------------------------
+  // ---- 3. Groups -------------------------------------------------------------
+  let groupDivs = [];
+  const GROUP_LETTERS = 'ABCDEFGHIJKL'.split('');
+  async function loadGroups() {
+    const box = document.getElementById('groupsBox');
+    try {
+      const { divisions } = await api('GET', '/api/tournament/groups');
+      groupDivs = divisions;
+      if (!divisions.length) { box.innerHTML = '<p class="muted">No Gold / Silver / Bronze divisions have games yet - set the division tiers above and sync the schedule.</p>'; return; }
+      box.innerHTML = divisions.map((d, di) => {
+        const saved = d.teams.some(t => t.grp);
+        const unassigned = d.teams.filter(t => !t.grp).length;
+        return `<div style="border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin-top:10px;">
+          <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+            <strong>${esc(d.gender)} ${esc(d.tier)}</strong>
+            <span class="muted" style="font-size:12px;">${d.teams.length} teams · ${d.games} games · ${saved ? (unassigned ? unassigned + ' not assigned' : 'all assigned') : 'not saved yet - the public page is guessing'}</span>
+            <span style="flex:1"></span>
+            <button onclick="useSuggested(${di})">Fill from schedule</button>
+            <button class="primary" onclick="saveGroups(${di}, this)">Save groups</button>
+            <button onclick="clearGroups(${di}, this)">Clear (back to guessing)</button>
+          </div>
+          <div class="table-scroll"><table><thead><tr><th>Team</th><th style="width:150px;">Group</th><th class="muted" style="width:150px;">Schedule suggests</th></tr></thead><tbody>
+          ${d.teams.map((t, ti) => `<tr><td>${esc(t.team_name)}</td>
+            <td><select id="grp-${di}-${ti}"><option value="">-</option>${GROUP_LETTERS.map(l => `<option value="${l}" ${t.grp === l ? 'selected' : ''}>${l}</option>`).join('')}</select></td>
+            <td class="muted">${t.suggested ? 'Group ' + t.suggested : '-'}</td></tr>`).join('')}
+          </tbody></table></div></div>`;
+      }).join('');
+    } catch (e) {
+      box.innerHTML = '<p class="muted">Could not load groups: ' + esc(e.message) + '</p>';
+    }
+  }
+  function useSuggested(di) {
+    groupDivs[di].teams.forEach((t, ti) => { document.getElementById(`grp-${di}-${ti}`).value = t.suggested || ''; });
+    setMsg('groupsMsg', 'Filled from the schedule - review, then Save groups. (Letters are a guess based on kickoff order.)', '');
+  }
+  async function saveGroups(di, btn) {
+    const d = groupDivs[di];
+    const assignments = d.teams.map((t, ti) => ({ team_id: t.team_id, grp: document.getElementById(`grp-${di}-${ti}`).value }));
+    const missing = assignments.filter(a => !a.grp).length;
+    if (missing && !confirm(missing + ' team(s) have no group. Unassigned teams are placed by their opponents when possible. Save anyway?')) return;
+    btn.disabled = true;
+    try {
+      const r = await api('POST', '/api/tournament/groups', { division_id: d.division_id, assignments });
+      setMsg('groupsMsg', `Saved ${d.gender} ${d.tier}: ${r.saved} teams.`, 'ok');
+      await loadGroups();
+    } catch (e) { setMsg('groupsMsg', e.message, 'error'); }
+    btn.disabled = false;
+  }
+  async function clearGroups(di, btn) {
+    const d = groupDivs[di];
+    if (!confirm('Remove all saved groups for ' + d.gender + ' ' + d.tier + '? The public page goes back to guessing from the schedule.')) return;
+    btn.disabled = true;
+    try {
+      await api('POST', '/api/tournament/groups', { division_id: d.division_id, assignments: [] });
+      setMsg('groupsMsg', `Cleared ${d.gender} ${d.tier}.`, 'ok');
+      await loadGroups();
+    } catch (e) { setMsg('groupsMsg', e.message, 'error'); }
+    btn.disabled = false;
+  }
+
   async function importKits(btn) {
     btn.disabled = true;
     setMsg('kitsMsg', 'Copying...');
@@ -305,6 +372,7 @@
     loadDivisions();
     loadSuspensions();
     loadCandidates();
+    loadGroups();
   })();
 </script>
 </body>

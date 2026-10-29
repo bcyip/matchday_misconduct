@@ -938,6 +938,21 @@ async function ensureTournamentTables() {
   } catch (err) {
     console.error('[tournament] Could not seed known division tiers:', err.message);
   }
+  // Which group (A, B, C...) each team is in, per division, for the public Nationals Live page.
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS tournament_groups (
+        division_id TEXT NOT NULL,
+        team_id TEXT NOT NULL,
+        grp TEXT NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_by TEXT,
+        PRIMARY KEY (division_id, team_id)
+      )
+    `);
+  } catch (err) {
+    console.error('[tournament] Could not ensure tournament_groups table exists:', err.message);
+  }
   // Draft / Live switch for each game's score on the public Nationals Live
   // page: a game's score is shown publicly only while published = true.
   // Absent row = draft.
@@ -967,6 +982,29 @@ async function ensureTournamentTables() {
     try { await pool.query(`ALTER TABLE suspensions ALTER COLUMN ${col} DROP NOT NULL`); }
     catch (err) { /* column may not exist or already be nullable - fine */ }
   }
+}
+
+// Suggested groups for one division from its games: the same rule the public page falls back to.
+// Group stage = all but the trailing knockout games (6 games per 4-team group; knockout is 7 or 3 games);
+// groups = sets of teams that play each other; lettered by earliest kickoff.
+function suggestGroupsForDivision(games) {
+  const fnum = f => /stadium/i.test(f || '') ? 0 : Number((String(f || '').match(/(\d+)\s*$/) || String(f || '').match(/(\d+)/) || [0, 999])[1]);
+  const gs = [...games].sort((x, y) => new Date(x.start_time) - new Date(y.start_time) || fnum(x.location_name) - fnum(y.location_name));
+  const n = gs.length; let koN = 0;
+  if (n % 6 === 1) koN = 7; else if (n % 6 === 3) koN = 3; else if (n % 6 !== 0) koN = n % 6 >= 3 ? n % 6 : 0;
+  const grp = gs.slice(0, n - koN);
+  const parent = {}; const find = x => parent[x] === x ? x : (parent[x] = find(parent[x]));
+  for (const g of grp) {
+    if (!g.home_team_id || !g.away_team_id) continue;
+    for (const k of [g.home_team_id, g.away_team_id]) if (!(k in parent)) parent[k] = k;
+    parent[find(g.home_team_id)] = find(g.away_team_id);
+  }
+  const comps = {};
+  for (const g of grp) if (g.home_team_id && g.away_team_id) (comps[find(g.home_team_id)] ||= []).push(g);
+  const out = {};
+  Object.values(comps).sort((x, y) => new Date(x[0].start_time) - new Date(y[0].start_time) || fnum(x[0].location_name) - fnum(y[0].location_name))
+    .forEach((cg, i) => { const letter = String.fromCharCode(65 + i); for (const g of cg) { out[g.home_team_id] = letter; out[g.away_team_id] = letter; } });
+  return out;
 }
 
 async function loadTournamentTierMap() {
@@ -1359,6 +1397,68 @@ const server = http.createServer(async (req, res) => {
       // Body: { team_id, team_name, player_name, profile_id, games_remaining, note }
       // games_remaining = how many games the player still has to sit out, counting
       // from the start of the tournament (or from now, if entered mid-tournament).
+      // GET /api/tournament/groups - every Gold/Silver/Bronze division with its teams, the saved group of
+      // each team, and a suggestion inferred from the schedule.
+      if (req.method === 'GET' && url.pathname === '/api/tournament/groups') {
+        const [gamesRes, savedRes, tierMap] = await Promise.all([
+          pool.query(
+            `SELECT game_id, start_time, location_name, division_id, gender, home_team_id, home_team, away_team_id, away_team
+               FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2 AND LOWER(COALESCE(program_name, '')) LIKE ANY($3)`,
+            [fromIso, toIso, tournamentProgramPatterns()]),
+          pool.query('SELECT division_id, team_id, grp FROM tournament_groups'),
+          loadTournamentTierMap(),
+        ]);
+        const saved = {};
+        for (const r of savedRes.rows) (saved[r.division_id] ||= {})[r.team_id] = r.grp;
+        const byDiv = new Map();
+        for (const g of gamesRes.rows) { if (!byDiv.has(g.division_id)) byDiv.set(g.division_id, []); byDiv.get(g.division_id).push(g); }
+        const divisions = [];
+        for (const [divId, games] of byDiv) {
+          const tier = tierMap.get(divId);
+          if (!tier || tier === 'Excluded') continue;
+          const suggested = suggestGroupsForDivision(games);
+          const teams = new Map();
+          for (const g of games) {
+            if (g.home_team_id && !teams.has(g.home_team_id)) teams.set(g.home_team_id, g.home_team);
+            if (g.away_team_id && !teams.has(g.away_team_id)) teams.set(g.away_team_id, g.away_team);
+          }
+          divisions.push({
+            division_id: divId, tier, gender: /^w/i.test(games[0].gender || '') ? 'Women' : 'Men', games: games.length,
+            teams: [...teams.entries()].map(([id, name]) => ({ team_id: id, team_name: name, grp: (saved[divId] || {})[id] || null, suggested: suggested[id] || null }))
+              .sort((a, b) => (a.grp || a.suggested || 'zz').localeCompare(b.grp || b.suggested || 'zz') || String(a.team_name).localeCompare(String(b.team_name))),
+          });
+        }
+        const order = { Men: 0, Women: 1 }, tOrder = { Gold: 0, Silver: 1, Bronze: 2 };
+        divisions.sort((a, b) => order[a.gender] - order[b.gender] || tOrder[a.tier] - tOrder[b.tier]);
+        return sendJson(200, { divisions });
+      }
+
+      // POST /api/tournament/groups {division_id, assignments:[{team_id, grp}]} - replaces that division's groups.
+      // An empty grp (or an empty list) leaves a team unassigned; an empty list returns the division to auto mode.
+      if (req.method === 'POST' && url.pathname === '/api/tournament/groups') {
+        const p = await readJsonBody(req, 100 * 1024);
+        if (!p.division_id || !Array.isArray(p.assignments)) return sendJson(400, { error: 'division_id and assignments are required.' });
+        const rows = [];
+        for (const a of p.assignments) {
+          if (!a || !a.team_id) continue;
+          const g = String(a.grp || '').trim().toUpperCase();
+          if (!g) continue;
+          if (!/^[A-Z]$/.test(g)) return sendJson(400, { error: 'Group must be a single letter A-Z.' });
+          rows.push([String(a.team_id), g]);
+        }
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          await client.query('DELETE FROM tournament_groups WHERE division_id = $1', [p.division_id]);
+          for (const [teamId, g] of rows) {
+            await client.query('INSERT INTO tournament_groups (division_id, team_id, grp, updated_by) VALUES ($1, $2, $3, $4)',
+              [p.division_id, teamId, g, session.name || session.email || null]);
+          }
+          await client.query('COMMIT');
+        } catch (e) { await client.query('ROLLBACK').catch(() => {}); throw e; } finally { client.release(); }
+        return sendJson(200, { ok: true, saved: rows.length });
+      }
+
       // POST /api/tournament/score-visibility {gameIds:[...], published:true|false}
       // Switches games' scores between Draft (hidden) and Live (shown on the public page).
       if (req.method === 'POST' && url.pathname === '/api/tournament/score-visibility') {
