@@ -918,6 +918,21 @@ async function ensureTournamentTables() {
   } catch (err) {
     console.error('[tournament] Could not seed known division tiers:', err.message);
   }
+  // Draft / Live switch for each game's score on the public Nationals Live
+  // page: a game's score is shown publicly only while published = true.
+  // Absent row = draft.
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS tournament_score_visibility (
+        game_id TEXT PRIMARY KEY,
+        published BOOLEAN NOT NULL DEFAULT false,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_by TEXT
+      )
+    `);
+  } catch (err) {
+    console.error('[tournament] Could not ensure tournament_score_visibility table exists:', err.message);
+  }
   // Manually entered (rolled-over) suspensions live in the existing
   // suspensions table, so matchday's suspended-player flag, its check-in block
   // and the games-served countdown all work on them with no further changes.
@@ -1324,6 +1339,21 @@ const server = http.createServer(async (req, res) => {
       // Body: { team_id, team_name, player_name, profile_id, games_remaining, note }
       // games_remaining = how many games the player still has to sit out, counting
       // from the start of the tournament (or from now, if entered mid-tournament).
+      // POST /api/tournament/score-visibility {gameIds:[...], published:true|false}
+      // Switches games' scores between Draft (hidden) and Live (shown on the public page).
+      if (req.method === 'POST' && url.pathname === '/api/tournament/score-visibility') {
+        const p = await readJsonBody(req, 200 * 1024);
+        const ids = Array.isArray(p.gameIds) ? [...new Set(p.gameIds.map(x => String(x)).filter(Boolean))] : [];
+        if (!ids.length || ids.length > 1000) return sendJson(400, { error: 'Provide between 1 and 1000 game IDs.' });
+        if (typeof p.published !== 'boolean') return sendJson(400, { error: 'published must be true or false.' });
+        await pool.query(
+          `INSERT INTO tournament_score_visibility (game_id, published, updated_at, updated_by)
+           SELECT g, $2, now(), $3 FROM unnest($1::text[]) AS g
+           ON CONFLICT (game_id) DO UPDATE SET published = EXCLUDED.published, updated_at = now(), updated_by = EXCLUDED.updated_by`,
+          [ids, p.published, session.name || session.email || null]);
+        return sendJson(200, { ok: true, updated: ids.length, published: p.published });
+      }
+
       if (req.method === 'POST' && url.pathname === '/api/tournament/suspensions') {
         const p = await readJsonBody(req, 10 * 1024);
         const games = parseInt(p.games_remaining, 10);
@@ -1597,6 +1627,15 @@ const server = http.createServer(async (req, res) => {
         entriesByGameId.get(e.game_id).push(e);
       }
 
+      // Tournament mode: which games' scores are Live on the public page.
+      let publishedIds = new Set();
+      if (TOURNAMENT_MODE) {
+        try {
+          const pubResult = await pool.query('SELECT game_id FROM tournament_score_visibility WHERE published = true');
+          publishedIds = new Set(pubResult.rows.map(r => r.game_id));
+        } catch (err) { console.error('[tournament] Could not read score visibility:', err.message); }
+      }
+
       let mergedRows;
 
       // Read from our own local cache instead of live-fetching the
@@ -1731,6 +1770,7 @@ const server = http.createServer(async (req, res) => {
           // purely manual, admin-entered flag. Never auto-set from a
           // SportsEngine score (see runScheduleSyncForRange).
           flagged_external: flaggedIds.has(r.game_id),
+          score_published: publishedIds.has(r.game_id), // tournament: score is Live on the public page
           // "SE manual score entry" - a standalone, independently-manual
           // flag tracking that a score was typed directly into SportsEngine,
           // decoupled from whether the MO report itself has been reviewed.

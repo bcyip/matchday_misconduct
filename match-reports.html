@@ -20,6 +20,10 @@
     th { text-align: left; font-size: 11px; text-transform: uppercase; color: var(--gray); padding: 8px; border-bottom: 2px solid var(--border); white-space: nowrap; }
     td { padding: 8px; border-bottom: 1px solid var(--border); font-size: 13.5px; }
     .card-count { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 700; margin-left: 4px; }
+    .pub-toggle { display: inline-flex; margin-top: 6px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+    .pub-toggle button { padding: 3px 9px; font-size: 11px; border: 0; background: #fff; color: var(--gray); cursor: pointer; }
+    .pub-toggle button.on.draft { background: #E6E9EF; color: var(--navy); font-weight: 700; }
+    .pub-toggle button.on.live { background: #1F7A4D; color: #fff; font-weight: 700; }
     .push-score-btn { padding: 5px 10px; font-size: 11.5px; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--navy); cursor: pointer; white-space: nowrap; }
     .push-score-btn:hover:not(:disabled) { background: var(--bg); }
     .push-score-btn:disabled { opacity: .5; cursor: not-allowed; }
@@ -128,6 +132,9 @@
       <div class="tbar-row"><span class="tbar-label">Day</span><div class="seg" id="tDayButtons"></div></div>
       <div class="tbar-row"><span class="tbar-label">Gender</span><div class="seg" id="tGenderButtons"></div></div>
       <div class="tbar-row"><span class="tbar-label">Division</span><div class="seg" id="tTierButtons"></div></div>
+      <div class="tbar-row"><span class="tbar-label">Public scores</span>
+        <div class="seg"><button type="button" onclick="setShownScoresVisibility(true)">Make all shown Live</button><button type="button" onclick="setShownScoresVisibility(false)">Set all shown to Draft</button></div>
+        <span class="muted" style="font-size:12px;">Draft scores stay hidden on the public schedule and standings.</span></div>
     </div>
     <div class="filters" id="seasonFilterRow">
       <div class="field">
@@ -556,6 +563,40 @@
     return text;
   }
 
+  // Tournament mode: Draft / Live switch deciding whether this game's score is
+  // shown on the public Nationals Live page. Only games with a real score get one.
+  function publishToggleHtml(r) {
+    if (!TOURNAMENT || !r.has_report || r.is_forfeit) return '';
+    const live = !!r.score_published;
+    return `<div class="pub-toggle" title="Public page shows this score only when Live">
+      <button type="button" class="${live ? '' : 'on draft'}" onclick="setScoreVisibility(['${escapeJs(r.game_id)}'], false)">Draft</button><button type="button" class="${live ? 'on live' : ''}" onclick="setScoreVisibility(['${escapeJs(r.game_id)}'], true)">Live</button>
+    </div>`;
+  }
+
+  async function setScoreVisibility(gameIds, published) {
+    try {
+      const res = await fetch('/api/tournament/score-visibility', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gameIds, published }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || 'Save failed');
+      const set = new Set(gameIds);
+      lastLoadedReports.forEach(r => { if (set.has(r.game_id)) r.score_published = published; });
+      applyReportFilterAndRender();
+    } catch (e) {
+      alert('Could not change score visibility: ' + e.message);
+    }
+  }
+
+  // Every game currently shown (day / gender / division filters) that has a score.
+  function setShownScoresVisibility(published) {
+    const ids = tournamentFilteredRows().filter(r => r.has_report && !r.is_forfeit).map(r => r.game_id);
+    if (!ids.length) { alert('No scores in the current view.'); return; }
+    if (!confirm((published ? 'Make ' : 'Set to Draft: ') + ids.length + ' score' + (ids.length === 1 ? '' : 's') + (published ? ' Live on the public page?' : ' (hidden from the public page)?'))) return;
+    setScoreVisibility(ids, published);
+  }
+
   // A Box Score button below the score, opening the events modal - only
   // meaningful once a real report exists (forfeits and not-yet-reported
   // games have no events to show).
@@ -765,6 +806,7 @@
               <td style="text-align:center; font-weight:700; white-space:nowrap;">
                 ${scoreCellHtml(r)}
                 <div>${boxScoreButtonHtml(r)}</div>
+                ${publishToggleHtml(r)}
               </td>
               <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team2_red_count, 'rc-count')}</td>
               <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team2_yellow_count, 'yc-count')}</td>
