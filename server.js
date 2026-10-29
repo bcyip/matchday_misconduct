@@ -737,6 +737,15 @@ const KIT_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
 const KIT_IMAGE_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 const OZARK_KIT_EXCLUDED_DIVISIONS = ['6a4e96e46b8d1e01201ee2ce', '6a4e9b904b609600f0e70d42'];
 
+// Manual final-score edits (Match Reports -> Box Score -> Edit final score) leave a trail.
+async function ensureScoreEditColumns() {
+  try {
+    await pool.query(`ALTER TABLE match_report_scores ADD COLUMN IF NOT EXISTS score_edited_by TEXT, ADD COLUMN IF NOT EXISTS score_edited_at TIMESTAMPTZ`);
+  } catch (err) {
+    console.error('[match-reports] Could not add score_edited_* columns:', err.message);
+  }
+}
+
 async function ensureTeamKitsTable() {
   try {
     await pool.query(`
@@ -1578,7 +1587,7 @@ const server = http.createServer(async (req, res) => {
           mrs.officials_present, mrs.crew_changes_needed,
           mrs.team1_id, mrs.team1_name, mrs.team1_score,
           mrs.team2_id, mrs.team2_name, mrs.team2_score,
-          mrs.submitted_at,
+          mrs.submitted_at, mrs.score_edited_by, mrs.score_edited_at,
           COALESCE(t1.yellow_count, 0) AS team1_yellow_count,
           COALESCE(t1.red_count, 0) AS team1_red_count,
           COALESCE(t2.yellow_count, 0) AS team2_yellow_count,
@@ -1770,6 +1779,8 @@ const server = http.createServer(async (req, res) => {
           // purely manual, admin-entered flag. Never auto-set from a
           // SportsEngine score (see runScheduleSyncForRange).
           flagged_external: flaggedIds.has(r.game_id),
+          score_edited_by: r.score_edited_by || null,
+          score_edited_at: r.score_edited_at || null,
           score_published: publishedIds.has(r.game_id), // tournament: score is Live on the public page
           // "SE manual score entry" - a standalone, independently-manual
           // flag tracking that a score was typed directly into SportsEngine,
@@ -2089,6 +2100,39 @@ const server = http.createServer(async (req, res) => {
       }
     });
     return;
+  }
+
+  // POST /api/match-reports/:gameId/set-score {team1_score, team2_score}
+  // Corrects the FINAL score of a submitted report on its own: goal entries are
+  // deliberately left untouched (so a score can be fixed without redoing scorers).
+  // Cards, suspensions and the report itself are not changed either. This does NOT
+  // push to SportsEngine - use Push Score to SE afterwards if that is wanted.
+  const setScoreMatch = url.pathname.match(/^\/api\/match-reports\/([^/]+)\/set-score$/);
+  if (req.method === 'POST' && setScoreMatch) {
+    const session = await getSession(cookies.admin_session);
+    if (!session) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Not logged in' }));
+    }
+    const sendJson2 = (status, obj) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
+    try {
+      const gameId = decodeURIComponent(setScoreMatch[1]);
+      const p = await readJsonBody(req, 2 * 1024);
+      const s1 = Number(p.team1_score), s2 = Number(p.team2_score);
+      if (!Number.isInteger(s1) || !Number.isInteger(s2) || s1 < 0 || s2 < 0 || s1 > 99 || s2 > 99) {
+        return sendJson2(400, { error: 'Both scores must be whole numbers from 0 to 99.' });
+      }
+      const r = await pool.query(
+        `UPDATE match_report_scores SET team1_score = $2, team2_score = $3, score_edited_by = $4, score_edited_at = now()
+          WHERE game_id = $1 RETURNING team1_score, team2_score, score_edited_by, score_edited_at`,
+        [gameId, s1, s2, session.name || session.email || null]);
+      if (r.rowCount === 0) return sendJson2(404, { error: 'No submitted report for this game, so there is no score to edit.' });
+      console.log(`[match-reports] ${session.name || session.email} set score for ${gameId} to ${s1}-${s2}`);
+      return sendJson2(200, { ok: true, ...r.rows[0] });
+    } catch (err) {
+      console.error('[api/match-reports set-score] Error:', err.message);
+      return sendJson2(500, { error: err.message });
+    }
   }
 
   const pushScoreMatch = url.pathname.match(/^\/api\/match-reports\/([^/]+)\/push-score$/);
@@ -2721,6 +2765,7 @@ server.listen(PORT, async () => {
   // so there's fresh data right away, then on the configured interval.
   await ensureLogoColumns();
   await ensureSeManualEntryTable();
+  await ensureScoreEditColumns();
   await ensureTeamKitsTable();
   await ensureGameKitAssignmentsTable();
   loadKitTeamListFile();

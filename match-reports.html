@@ -854,6 +854,53 @@
   // Match events for the box score modal - home (Team 1) on the left,
   // away (Team 2) on the right, sorted by minute (nulls last, same as the
   // server-side ordering).
+  // Edit the final score on its own (goal scorers stay exactly as submitted).
+  function scoreEditHtml(r) {
+    if (r.is_forfeit || !r.has_report) return '';
+    const gid = escapeJs(r.game_id);
+    const edited = r.score_edited_by
+      ? `<div class="muted" style="font-size:11.5px; margin-top:4px;">Score last edited by ${escapeHtml(r.score_edited_by)}${r.score_edited_at ? ' on ' + new Date(r.score_edited_at).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short' }) + ' ET' : ''}.</div>` : '';
+    return `
+      <div style="margin-top:14px; border-top:1px solid var(--border); padding-top:12px;">
+        <h4 style="font-size:12px; text-transform:uppercase; color:var(--gray); margin:0 0 6px;">Edit final score</h4>
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <span style="font-size:13px; font-weight:600;">${escapeHtml(r.team1_name)}</span>
+          <input id="editScore1" type="number" min="0" max="99" inputmode="numeric" value="${r.team1_score != null ? r.team1_score : ''}" style="width:58px; padding:6px; text-align:center; font-size:15px; border:1px solid var(--border); border-radius:6px;">
+          <span>–</span>
+          <input id="editScore2" type="number" min="0" max="99" inputmode="numeric" value="${r.team2_score != null ? r.team2_score : ''}" style="width:58px; padding:6px; text-align:center; font-size:15px; border:1px solid var(--border); border-radius:6px;">
+          <span style="font-size:13px; font-weight:600;">${escapeHtml(r.team2_name)}</span>
+          <button class="push-score-btn" onclick="saveFinalScore('${gid}', this)">Save score</button>
+        </div>
+        <div id="editScoreMsg" style="font-size:12px; margin-top:4px;"></div>
+        <div class="muted" style="font-size:11.5px; margin-top:4px;">Goal scorers and cards are not changed. SportsEngine is not updated automatically${TOURNAMENT ? ' - use Push Score to SE below if needed' : ''}.</div>
+        ${edited}
+      </div>`;
+  }
+
+  async function saveFinalScore(gameId, btn) {
+    const msg = document.getElementById('editScoreMsg');
+    const v1 = document.getElementById('editScore1').value, v2 = document.getElementById('editScore2').value;
+    if (v1 === '' || v2 === '') { msg.style.color = 'var(--danger)'; msg.textContent = 'Enter both scores.'; return; }
+    btn.disabled = true; msg.style.color = ''; msg.textContent = 'Saving...';
+    try {
+      const res = await fetch('/api/match-reports/' + encodeURIComponent(gameId) + '/set-score', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team1_score: Number(v1), team2_score: Number(v2) }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || 'Save failed');
+      const r = lastLoadedReports.find(x => x.game_id === gameId);
+      if (r) { r.team1_score = json.team1_score; r.team2_score = json.team2_score; r.score_edited_by = json.score_edited_by; r.score_edited_at = json.score_edited_at; }
+      applyReportFilterAndRender();
+      openBoxScore(gameId); // refresh the popup (subtitle, edit trail)
+      const m2 = document.getElementById('editScoreMsg');
+      if (m2) { m2.style.color = 'var(--success, #1F7A4D)'; m2.textContent = '✓ Score saved.'; }
+    } catch (e) {
+      msg.style.color = 'var(--danger)'; msg.textContent = 'Failed: ' + e.message;
+      btn.disabled = false;
+    }
+  }
+
   function openBoxScore(gameId) {
     const r = lastLoadedReports.find(x => x.game_id === gameId);
     if (!r) return;
@@ -898,6 +945,7 @@
         <div style="white-space:pre-wrap; margin-top:2px;">${escapeHtml(e.supplemental_report)}</div>
       </div>`).join('');
     document.getElementById('boxScoreExtra').innerHTML = `
+      ${scoreEditHtml(r)}
       <div style="margin-top:16px; border-top:1px solid var(--border); padding-top:12px;">
         <h4 style="font-size:12px; text-transform:uppercase; color:var(--gray); margin:0 0 6px;">Report Description</h4>
         ${hasDesc ? `<div style="white-space:pre-wrap; font-size:13.5px;">${escapeHtml(r.incident_report)}</div>` : ''}
