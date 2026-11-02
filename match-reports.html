@@ -132,7 +132,7 @@
       <div class="tbar-row"><span class="tbar-label">Day</span><div class="seg" id="tDayButtons"></div></div>
       <div class="tbar-row"><span class="tbar-label">Gender</span><div class="seg" id="tGenderButtons"></div></div>
       <div class="tbar-row"><span class="tbar-label">Division</span><div class="seg" id="tTierButtons"></div></div>
-      <div class="tbar-row"><span class="tbar-label">Export</span><div class="seg"><button type="button" onclick="exportShownCsv()">Export CSV (games shown)</button></div></div>
+      <div class="tbar-row"><span class="tbar-label">Export</span><div class="seg"><button type="button" onclick="exportShownCsv()">Export CSV (games shown)</button><button type="button" onclick="exportBoxScoresCsv()">Export box scores CSV</button></div></div>
       <div class="tbar-row"><span class="tbar-label">Public scores</span>
         <div class="seg"><button type="button" onclick="setShownScoresVisibility(true)">Make all shown Live</button><button type="button" onclick="setShownScoresVisibility(false)">Set all shown to Draft</button></div>
         <span class="muted" style="font-size:12px;">Draft scores stay hidden on the public schedule and standings.</span></div>
@@ -191,6 +191,10 @@
       <div class="field">
         <label style="visibility:hidden;">.</label>
         <button type="button" onclick="loadReports()" style="padding:9px 20px; background:var(--navy); color:#fff; border:none; border-radius:6px; font-size:13.5px; font-weight:600; cursor:pointer;">Load Reports</button>
+        <span id="exportBtnsRegular" style="display:inline-flex; gap:8px; margin-left:10px;">
+          <button type="button" onclick="exportShownCsv()" style="padding:9px 14px; background:#fff; color:var(--navy); border:1px solid var(--border); border-radius:6px; font-size:13px; font-weight:600; cursor:pointer;">Export CSV (games shown)</button>
+          <button type="button" onclick="exportBoxScoresCsv()" style="padding:9px 14px; background:#fff; color:var(--navy); border:1px solid var(--border); border-radius:6px; font-size:13px; font-weight:600; cursor:pointer;">Export box scores CSV</button>
+        </span>
       </div>
     </div>
   </div>
@@ -384,6 +388,43 @@
 
   let shownReports = [];
 
+  function downloadCsv(lines, name) {
+    const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  // Box scores for the games shown: one row per goal / card, each row carrying the game details and
+  // final score, so it reads (and filters) well in Excel. A reported game with no events still gets one row.
+  function exportBoxScoresCsv() {
+    const games = shownReports.filter(r => r.has_report && !r.is_forfeit)
+      .sort((a, b) => new Date(a.game_date || 0) - new Date(b.game_date || 0));
+    if (!games.length) { alert('No games with a match report in the current view.'); return; }
+    const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const lines = [['Date', 'Time (ET)', 'Location', 'Division', 'Gender', 'Home Team', 'Away Team', 'Final Score', 'Team', 'Event', 'Player / Staff', 'Minute', 'Reason', 'Match Report URL'].map(q).join(',')];
+    for (const r of games) {
+      const d = r.game_date ? new Date(r.game_date) : null;
+      const base = [
+        d ? d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) : '',
+        d ? d.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' }) : '',
+        r.location_name || '', r.division_name || '', r.gender || '', r.team1_name || '', r.team2_name || '',
+        (r.team1_score != null && r.team2_score != null) ? r.team1_score + ' - ' + r.team2_score : '',
+      ];
+      const url = r.game_id ? 'https://octopus-app-ilp92.ondigitalocean.app/?game=' + encodeURIComponent(r.game_id) : '';
+      const rank = e => e.event_type === 'Goal' ? 0 : 1;
+      const ev = (r.entries || []).slice().sort((a, b) => (a.minute == null ? 999 : a.minute) - (b.minute == null ? 999 : b.minute) || rank(a) - rank(b));
+      if (!ev.length) lines.push([...base, '', '', '', '', '', url].map(q).join(','));
+      for (const e of ev) {
+        lines.push([...base, e.team_name || (e.team_id === r.team1_id ? r.team1_name : e.team_id === r.team2_id ? r.team2_name : ''),
+          e.event_type || '', e.name || '', e.minute != null ? e.minute : '', e.reason || '', url].map(q).join(','));
+      }
+    }
+    downloadCsv(lines, 'box-scores-' + new Date().toISOString().slice(0, 10) + '.csv');
+  }
+
   // Tournament mode: download the games currently shown (day / gender / division / Show filters) as a CSV:
   // match report link, date, time, location, teams, division, gender. Dates and times are Eastern.
   function exportShownCsv() {
@@ -433,6 +474,7 @@
     document.title = TOURNAMENT.name + ' — Match Reports';
     document.getElementById('tournamentNavLink').style.display = '';
     document.getElementById('tournamentBar').style.display = '';
+    document.getElementById('exportBtnsRegular').style.display = 'none'; // tournament mode has its own Export row
     // The season filters (conference, division, team, gender dropdown, dates)
     // don't apply here - the day / gender / division buttons replace them.
     document.getElementById('seasonDateRow').style.display = 'none';
