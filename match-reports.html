@@ -1199,8 +1199,13 @@
     return `<div class="tblock">${badge}<span>${escapeHtml(name || 'TBD')}</span></div>`;
   }
   function pubKitSvg(c) {
-    const f = v => v || 'none';
-    return `<svg viewBox="0 0 40 50" aria-hidden="true"><path d="M12 2 L4 7 L1 17 L8 19 L9 13 L9 28 L31 28 L31 13 L32 19 L39 17 L36 7 L28 2 Q20 7 12 2Z" fill="${f(c.jersey_color)}" stroke="#8A96A8" stroke-width="1.4"/><path d="M9 29 L31 29 L32 38 L22 38 L20 34 L18 38 L8 38Z" fill="${f(c.shorts_color)}" stroke="#8A96A8" stroke-width="1.4"/><rect x="10" y="40" width="7" height="9" rx="1.5" fill="${f(c.socks_color)}" stroke="#8A96A8" stroke-width="1.4"/><rect x="23" y="40" width="7" height="9" rx="1.5" fill="${f(c.socks_color)}" stroke="#8A96A8" stroke-width="1.4"/></svg>`;
+    // Set color = solid fill; no color set = dashed, unfilled outline (distinct from a white kit).
+    const part = (v, d, tag) => v
+      ? `<${tag} ${d} fill="${v}" stroke="#8A96A8" stroke-width="1.4"/>`
+      : `<${tag} ${d} fill="none" stroke="#8A96A8" stroke-width="1.2" stroke-dasharray="2.6 2.2"/>`;
+    const J = 'd="M12 2 L4 7 L1 17 L8 19 L9 13 L9 28 L31 28 L31 13 L32 19 L39 17 L36 7 L28 2 Q20 7 12 2Z"', S = 'd="M9 29 L31 29 L32 38 L22 38 L20 34 L18 38 L8 38Z"';
+    const L = 'x="10" y="40" width="7" height="9" rx="1.5"', R = 'x="23" y="40" width="7" height="9" rx="1.5"';
+    return `<svg viewBox="0 0 40 50" aria-hidden="true">${part(c.jersey_color, J, 'path')}${part(c.shorts_color, S, 'path')}${part(c.socks_color, L, 'rect')}${part(c.socks_color, R, 'rect')}</svg>`;
   }
   // Fixed-size Player / GK kit box; a dash for any kit not set. Click opens the kits modal.
   function kitBoxHtml(r, side) {
