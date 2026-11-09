@@ -49,6 +49,23 @@
        layout (report link left / teams right, score+cards+box-score
        stacked and centered below the teams) doesn't map onto reshuffled
        table cells. */
+
+    /* Public-tournament style team block (logo above name) and kit box (fixed size, dash when missing). */
+    .tlg { width: 34px; height: 34px; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; overflow: hidden; flex: none; background: #fff; border: 1px solid var(--border); }
+    .tlg img { width: 100%; height: 100%; object-fit: contain; }
+    .tlg.ini { background: var(--navy); color: var(--gold); font-weight: 800; font-size: 11px; }
+    .tblock { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-width: 90px; text-align: center; overflow-wrap: anywhere; font-weight: 800; font-size: 13px; line-height: 1.15; color: var(--navy); }
+    .kbox { display: inline-flex; gap: 8px; align-items: flex-end; justify-content: center; width: 116px; flex: none; border: 1px solid var(--border); background: #F7F9FC; border-radius: 8px; padding: 5px 8px; cursor: pointer; vertical-align: middle; }
+    .kbox:hover { border-color: #6BC4E8; }
+    .kbox .kit { display: flex; flex-direction: column; align-items: center; gap: 2px; width: 44px; }
+    .kbox .kit svg { width: 30px; height: auto; display: block; }
+    .kbox .kit span { font-size: 10px; font-weight: 700; letter-spacing: .1em; color: var(--gray); text-transform: uppercase; }
+    .kbox .dash { height: 38px; display: flex; align-items: center; justify-content: center; color: var(--gray); font-weight: 800; font-size: 18px; }
+    .mr-card-pub { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "t1 t2" "k1 k2"; gap: 8px 10px; align-items: start; justify-items: center; margin-top: 6px; }
+    .mr-card-pub > :nth-child(1) { grid-area: t1; } .mr-card-pub > :nth-child(2) { grid-area: k1; }
+    .mr-card-pub > :nth-child(3) { grid-area: k2; } .mr-card-pub > :nth-child(4) { grid-area: t2; }
+    .mr-card-pub .tblock { min-width: 0; width: 100%; font-size: 12px; }
+    .mr-card-sub { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 6px; font-size: 13px; font-weight: 600; }
     .mr-cards { display: none; }
     .mr-card { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; }
     .mr-card-report-link { display: block; text-align: center; font-size: 11px; font-weight: 600; color: var(--navy); text-decoration: none; }
@@ -866,9 +883,9 @@
       <table>
         <thead><tr>
           <th>Match Report</th><th>Game Date</th><th>Division</th>
-          <th style="text-align:right;">Team 1</th><th style="text-align:center;">YC</th><th style="text-align:center;">RC</th>
+          <th style="text-align:center;">Team 1</th><th style="text-align:center;">Kits</th><th style="text-align:center;">YC</th><th style="text-align:center;">RC</th>
           <th style="text-align:center;">Score</th>
-          <th style="text-align:center;">RC</th><th style="text-align:center;">YC</th><th>Team 2</th>${TOURNAMENT ? '' : '<th>Actions</th><th>Officials / Crew</th>'}
+          <th style="text-align:center;">RC</th><th style="text-align:center;">YC</th><th style="text-align:center;">Kits</th><th style="text-align:center;">Team 2</th>${TOURNAMENT ? '' : '<th>Actions</th><th>Officials / Crew</th>'}
         </tr></thead>
         <tbody>
           ${reports.map(r => {
@@ -879,7 +896,8 @@
               <td style="font-size:11.5px; white-space:nowrap;">${r.game_id ? `<a href="https://octopus-app-ilp92.ondigitalocean.app/?game=${encodeURIComponent(r.game_id)}" target="_blank" rel="noopener" style="color:var(--navy);">Match Report URL</a>` : '—'}<div><a href="#" class="kits-link" onclick="openKitsModal('${escapeJs(r.game_id)}'); return false;">Kits</a></div></td>
               <td>${r.game_date ? new Date(r.game_date).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short' }) + ' ET' : '—'}</td>
               <td>${escapeHtml(r.division_name || '')}<div class="muted" style="font-size:11.5px;">${escapeHtml(r.gender || '')}</div></td>
-              <td style="text-align:right;">${escapeHtml(r.team1_name)}${miniKitHtml(r, 1)}</td>
+              <td style="text-align:center;">${teamBlockHtml(r, 1)}</td>
+              <td style="text-align:center;">${kitBoxHtml(r, 1)}</td>
               <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team1_yellow_count, 'yc-count')}</td>
               <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team1_red_count, 'rc-count')}</td>
               <td style="text-align:center; font-weight:700; white-space:nowrap;">
@@ -890,12 +908,13 @@
               </td>
               <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team2_red_count, 'rc-count')}</td>
               <td style="text-align:center;">${r.is_forfeit ? '' : cardCount(r.team2_yellow_count, 'yc-count')}</td>
-              <td>${miniKitHtml(r, 2)}${escapeHtml(r.team2_name)}</td>
+              <td style="text-align:center;">${kitBoxHtml(r, 2)}</td>
+              <td style="text-align:center;">${teamBlockHtml(r, 2)}</td>
               ${TOURNAMENT ? '' : `<td>${actionsHtml(r)}</td><td>${crewInfoHtml(r)}</td>`}
             </tr>
             ${r.incident_report ? `
             <tr id="incident-row-${escapeJs(r.game_id)}" style="display:none;">
-              <td colspan="${TOURNAMENT ? 10 : 12}" style="background:var(--bg); font-size:13px;">
+              <td colspan="${TOURNAMENT ? 12 : 14}" style="background:var(--bg); font-size:13px;">
                 <strong>Incident Report:</strong>
                 <div style="white-space:pre-wrap; margin-top:4px;">${escapeHtml(r.incident_report)}</div>
               </td>
@@ -915,12 +934,11 @@
             <a class="mr-card-report-link" href="${r.game_id ? 'https://octopus-app-ilp92.ondigitalocean.app/?game=' + encodeURIComponent(r.game_id) : '#'}" target="_blank" rel="noopener">${r.game_id ? 'Match Report URL' : '—'}</a>
             <div class="mr-card-meta" style="margin-top:0;"><a href="#" class="kits-link" onclick="openKitsModal('${escapeJs(r.game_id)}'); return false;">Kits</a></div>
             <div class="mr-card-meta">${r.game_date ? new Date(r.game_date).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short' }) + ' ET' : '—'} · ${escapeHtml(r.gender || '')} · ${escapeHtml(r.division_name || '')}${!r.has_report && !r.is_forfeit && r.se_home_score != null && r.se_away_score != null ? ' · (score from SE/MO)' : ''}</div>
-            <div class="mr-card-teams">
-              <div class="mr-card-team">${escapeHtml(r.team1_name)}${miniKitHtml(r, 1)}</div>
-              ${!r.is_forfeit ? `<div class="mr-card-cards">${cardCount(r.team1_yellow_count, 'yc-count')}${cardCount(r.team1_red_count, 'rc-count')}</div>` : ''}
-              <div class="mr-card-score-inline">${mobileScoreLineHtml(r)}</div>
-              ${!r.is_forfeit ? `<div class="mr-card-cards">${cardCount(r.team2_yellow_count, 'yc-count')}${cardCount(r.team2_red_count, 'rc-count')}</div>` : ''}
-              <div class="mr-card-team">${miniKitHtml(r, 2)}${escapeHtml(r.team2_name)}</div>
+            <div class="mr-card-pub">${teamBlockHtml(r, 1)}${kitBoxHtml(r, 1)}${kitBoxHtml(r, 2)}${teamBlockHtml(r, 2)}</div>
+            <div class="mr-card-sub">
+              ${!r.is_forfeit ? `<span class="mr-card-cards">${cardCount(r.team1_yellow_count, 'yc-count')}${cardCount(r.team1_red_count, 'rc-count')}</span>` : ''}
+              <span class="mr-card-score-inline">${mobileScoreLineHtml(r)}</span>
+              ${!r.is_forfeit ? `<span class="mr-card-cards">${cardCount(r.team2_yellow_count, 'yc-count')}${cardCount(r.team2_red_count, 'rc-count')}</span>` : ''}
             </div>
             ${r.incident_report && !r.is_forfeit ? `<div class="mr-card-incident-row"><button class="push-score-btn" onclick="openIncidentReportModal('${escapeJs(r.game_id)}')">View Incident Report</button></div>` : ''}
             <div class="mr-card-actions">${actionsHtml(r, true)}</div>
@@ -1170,6 +1188,33 @@
     return out;
   }
 
+  function teamInitials(n) { const w = String(n || '').replace(/[^A-Za-z0-9 ]/g, ' ').trim().split(/\s+/); return ((w.length > 1 ? w[0][0] + w[1][0] : (w[0] || '?').slice(0, 2))).toUpperCase(); }
+  function teamBlockHtml(r, side) {
+    const name = side === 1 ? r.team1_name : r.team2_name;
+    const logo = side === 1 ? r.team1_logo : r.team2_logo;
+    const ini = escapeHtml(teamInitials(name));
+    const badge = (logo && /^https:\/\//.test(logo))
+      ? `<span class="tlg"><img src="${escapeHtml(logo)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentNode.className='tlg ini';this.parentNode.textContent='${ini}'"></span>`
+      : `<span class="tlg ini">${ini}</span>`;
+    return `<div class="tblock">${badge}<span>${escapeHtml(name || 'TBD')}</span></div>`;
+  }
+  function pubKitSvg(c) {
+    const f = v => v || 'none';
+    return `<svg viewBox="0 0 40 50" aria-hidden="true"><path d="M12 2 L4 7 L1 17 L8 19 L9 13 L9 28 L31 28 L31 13 L32 19 L39 17 L36 7 L28 2 Q20 7 12 2Z" fill="${f(c.jersey_color)}" stroke="#8A96A8" stroke-width="1.4"/><path d="M9 29 L31 29 L32 38 L22 38 L20 34 L18 38 L8 38Z" fill="${f(c.shorts_color)}" stroke="#8A96A8" stroke-width="1.4"/><rect x="10" y="40" width="7" height="9" rx="1.5" fill="${f(c.socks_color)}" stroke="#8A96A8" stroke-width="1.4"/><rect x="23" y="40" width="7" height="9" rx="1.5" fill="${f(c.socks_color)}" stroke="#8A96A8" stroke-width="1.4"/></svg>`;
+  }
+  // Fixed-size Player / GK kit box; a dash for any kit not set. Click opens the kits modal.
+  function kitBoxHtml(r, side) {
+    const teamId = teamIdFor(r, side);
+    const kits = (teamId && kitsByTeam[teamId]) || {};
+    const a = assignmentFor(r, side);
+    const tile = (group, label) => {
+      const c = mixedKitColors(kits, side, group, part => a[group + '_' + part]);
+      return (c.jersey_color || c.shorts_color || c.socks_color)
+        ? `<div class="kit">${pubKitSvg(c)}<span>${label}</span></div>`
+        : `<div class="kit"><div class="dash">—</div><span>${label}</span></div>`;
+    };
+    return `<div class="kbox" title="Click for all kits" onclick="openKitsModal('${escapeJs(r.game_id)}')">${tile('out', 'Player')}${tile('gk', 'GK')}</div>`;
+  }
   function miniKitHtml(r, side) {
     const teamId = teamIdFor(r, side);
     const kits = (teamId && kitsByTeam[teamId]) || {};

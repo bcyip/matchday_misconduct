@@ -1796,6 +1796,12 @@ const server = http.createServer(async (req, res) => {
       // schedule cache has it), so it's looked up here and attached to
       // every row below regardless of whether a real report exists yet.
       const locationByGameId = new Map(cacheResult.rows.map(g => [g.game_id, g.location_name]));
+      // Team logos (from the schedule cache) by team id, for the public-style team display.
+      const logoByTeamId = new Map();
+      for (const g of cacheResult.rows) {
+        if (g.home_team_id && g.home_team_logo_url) logoByTeamId.set(g.home_team_id, g.home_team_logo_url);
+        if (g.away_team_id && g.away_team_logo_url) logoByTeamId.set(g.away_team_id, g.away_team_logo_url);
+      }
       const cacheStartByGameId = new Map(cacheResult.rows.map(g => [g.game_id, g.start_time]));
       const gameStatusByGameId = new Map(cacheResult.rows.map(g => [g.game_id, g.game_status]));
 
@@ -1932,6 +1938,8 @@ const server = http.createServer(async (req, res) => {
           // real report (forfeits, or nothing submitted yet).
           entries: entriesByGameId.get(r.game_id) || [],
           location_name: locationByGameId.get(r.game_id) || null,
+          team1_logo: logoByTeamId.get(r.team1_id) || null,
+          team2_logo: logoByTeamId.get(r.team2_id) || null,
         };
       });
 
