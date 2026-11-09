@@ -496,7 +496,7 @@ const SE_EVENTS_QUERY = `
     events(organizationId: $orgId, from: $from, to: $to, calendarEventType: GAME, page: $page, perPage: $perPage) {
       results {
         id
-        eventTeams { name score team { id program { primaryName } divisionId brand { logoUrl } } homeTeam }
+        eventTeams { name score team { id name program { primaryName } divisionId brand { logoUrl } } homeTeam }
         start
         subvenue { name venueId venueName }
         subvenueId
@@ -514,6 +514,19 @@ function deriveGenderFromProgramName(primaryName) {
   if (lower.includes('women')) return 'Women';
   if (lower.includes('men')) return 'Men';
   return null;
+}
+
+// SportsEngine keeps a per-game label on each eventTeam (e.g. "Silver D2") that does
+// NOT follow when a real team is assigned to that slot - the linked team's logo and id
+// update, but the label stays. When the label is a tournament placeholder
+// ("Gold A1", "Silver D2", ...) and a real team is linked, use the linked team's own name.
+const PLACEHOLDER_LABEL = /^(gold|silver|bronze)\s+[a-z]\d+$/i;
+function seTeamName(et) {
+  if (!et) return null;
+  const label = et.name || null;
+  const real = et.team && et.team.name;
+  if (label && real && real !== label && PLACEHOLDER_LABEL.test(String(label).trim()) && !PLACEHOLDER_LABEL.test(String(real).trim())) return real;
+  return label;
 }
 
 function extractGameInfo(event) {
@@ -535,8 +548,8 @@ function extractGameInfo(event) {
     eventId: event.id,
     startTime: event.start || null,
     locationName,
-    homeTeam: (home && home.name) || null,
-    awayTeam: (away && away.name) || null,
+    homeTeam: seTeamName(home),
+    awayTeam: seTeamName(away),
     homeTeamId: (home && home.team && home.team.id) || null,
     awayTeamId: (away && away.team && away.team.id) || null,
     homeTeamLogoUrl: (home && home.team && home.team.brand && home.team.brand.logoUrl) || null,
