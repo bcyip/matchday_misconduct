@@ -187,9 +187,23 @@
           <td>${s.games_suspended}</td><td>${s.games_served}</td>
           <td>${s.games_remaining > 0 ? '<b>' + s.games_remaining + '</b>' : '<span class="pill">Served</span>'}</td>
           <td class="muted">${esc(s.note || '')}</td>
-          <td><button class="danger" onclick="deleteSuspension(${s.id}, '${esc(s.player_name).replace(/'/g, '&#39;')}')">Delete</button></td></tr>`).join('')}
+          <td><button onclick="editSuspension(${s.id}, '${esc(s.player_name).replace(/'/g, '&#39;')}', ${s.games_suspended}, ${s.games_served})">Edit</button>
+            <button class="danger" onclick="deleteSuspension(${s.id}, '${esc(s.player_name).replace(/'/g, '&#39;')}')">Delete</button></td></tr>`).join('')}
       </table>`;
     } catch (e) { box.innerHTML = '<p class="msg err">' + esc(e.message) + '</p>'; }
+  }
+  // Edit the total games to serve. If the suspension was entered after a tournament game was
+  // already played, that game is not counted (counting starts when it was entered); the second
+  // prompt lets you count every tournament game already played instead.
+  async function editSuspension(id, name, games, served) {
+    const v = prompt('Total games ' + name + ' must serve (currently ' + games + ', ' + served + ' counted as served so far):', games);
+    if (v === null) return;
+    const n = parseInt(v, 10);
+    if (!Number.isInteger(n) || n < 1 || n > 20) { setMsg('suspensionsMsg', 'Enter a whole number from 1 to 20.', 'err'); return; }
+    const body = { games_suspended: n };
+    if (confirm('Count tournament games already played toward this suspension?\n\nOK = yes, count from the first tournament game (use if ' + name + ' sat out games before you entered this)\nCancel = keep counting only from when it was entered')) body.count_from = 'start';
+    try { await api('PATCH', '/api/tournament/suspensions/' + id, body); setMsg('suspensionsMsg', 'Updated.', 'ok'); loadSuspensions(); }
+    catch (e) { setMsg('suspensionsMsg', e.message, 'err'); }
   }
   async function deleteSuspension(id, name) {
     if (!confirm('Delete the suspension entered for ' + name + '? They will no longer be flagged in Matchday.')) return;

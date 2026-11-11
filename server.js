@@ -1512,6 +1512,25 @@ const server = http.createServer(async (req, res) => {
         return sendJson(200, { success: true });
       }
 
+      // PATCH /api/tournament/suspensions/:id - edit a rolled-over suspension: the TOTAL
+      // games to serve, and optionally where counting starts (count_from: 'start' = count
+      // every tournament game already played; 'entry' = only games after right now;
+      // anything else / omitted = leave as is).
+      const susPatchMatch = url.pathname.match(/^\/api\/tournament\/suspensions\/(\d+)$/);
+      if (req.method === 'PATCH' && susPatchMatch) {
+        const p = await readJsonBody(req, 10 * 1024);
+        const games = parseInt(p.games_suspended, 10);
+        if (!Number.isInteger(games) || games < 1 || games > 20) return sendJson(400, { error: 'Games to serve must be a whole number from 1 to 20.' });
+        const sets = ['games_suspended = $1', 'standard_games = $1'];
+        const vals = [games];
+        if (p.count_from === 'start') { sets.push(`issued_from_game_date = $${vals.length + 1}`); vals.push(new Date(b.from.getTime() - 1000).toISOString()); }
+        else if (p.count_from === 'entry') { sets.push(`issued_from_game_date = $${vals.length + 1}`); vals.push(new Date().toISOString()); }
+        if (typeof p.note === 'string') { sets.push(`note = $${vals.length + 1}`); vals.push(p.note.slice(0, 500) || null); }
+        vals.push(parseInt(susPatchMatch[1], 10));
+        const up = await pool.query(`UPDATE suspensions SET ${sets.join(', ')} WHERE id = $${vals.length} AND source = 'tournament_rollover'`, vals);
+        return sendJson(up.rowCount ? 200 : 404, up.rowCount ? { success: true } : { error: 'Not found (only manually entered suspensions can be edited here).' });
+      }
+
       // DELETE /api/tournament/suspensions/:id - only manual rollover rows.
       const susDeleteMatch = url.pathname.match(/^\/api\/tournament\/suspensions\/(\d+)$/);
       if (req.method === 'DELETE' && susDeleteMatch) {
