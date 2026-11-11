@@ -217,6 +217,7 @@
     tbody.innerHTML = misconductData.map(row => {
       const dateStr = row.game_date ? new Date(row.game_date).toLocaleDateString('en-US', { timeZone: 'America/New_York' }) : '—';
       const isReport = row.event_type === 'Report';
+      const isRollover = String(row.entry_id).startsWith('rollover-');
       const rowHtml = `
         <tr class="incident-row" onclick="toggleDetail('${row.entry_id}')">
           <td>${dateStr}</td>
@@ -235,10 +236,22 @@
         </tr>
       `;
       const detailHtml = String(expandedEntryId) === String(row.entry_id)
-        ? `<tr><td colspan="9">${isReport ? renderIncidentReportPanel(row) : renderDetailPanel(row)}</td></tr>`
+        ? `<tr><td colspan="9">${isReport ? renderIncidentReportPanel(row) : (isRollover ? renderRolloverPanel(row) : renderDetailPanel(row))}</td></tr>`
         : '';
       return rowHtml + detailHtml;
     }).join('');
+  }
+
+  // Suspension carried over from the season (entered on Tournament Setup): no card
+  // behind it, already decided - shown read-only. Edit or delete it on Tournament Setup.
+  function renderRolloverPanel(row) {
+    return `
+      <div class="detail-panel">
+        <div class="section-label" style="margin-top:0;">Rolled-over suspension</div>
+        <p style="margin:0 0 6px;">${escapeHtml(row.name)} (${escapeHtml(row.team_name)}) &mdash; ${row.games_suspended} game(s) carried over from the season${row.games_served != null ? ', ' + row.games_served + ' served so far' : ''}.</p>
+        ${row.committee_notes ? `<p class="muted" style="margin:0 0 6px;">Note: ${escapeHtml(row.committee_notes)}</p>` : ''}
+        <p class="muted" style="margin:0;">Entered by ${escapeHtml(row.reviewed_by || 'admin')}. To change or remove it, use Tournament Setup &rarr; Suspensions.</p>
+      </div>`;
   }
 
   function toggleDetail(entryId) {

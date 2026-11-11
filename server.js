@@ -2451,11 +2451,42 @@ const server = http.createServer(async (req, res) => {
         WHERE ${incidentConditions.join(' AND ')}
       `;
 
+      // Tournament mode: suspensions rolled over from the season (entered on Tournament
+      // Setup) have no match-report entry behind them, so the card query above can't see
+      // them. Surface them as synthetic Red Card rows so they sit in the same list.
+      // They are already decided, so they show as 'reviewed' and are read-only here.
+      let rolloverRows = [];
+      if (TOURNAMENT_MODE && includeRed && reviewStatus !== 'pending') {
+        const rc = []; const rp = []; let ri = 1;
+        if (teamId) { rc.push(`s.team_id = $${ri++}`); rp.push(teamId); }
+        if (playerName) { rc.push(`s.player_name ILIKE $${ri++}`); rp.push('%' + playerName + '%'); }
+        try {
+          const rr = await pool.query(`
+            SELECT ('rollover-' || s.id) AS entry_id, NULL AS game_id, s.team_id, s.team_name, 'player' AS person_type,
+              s.profile_id, s.player_name AS name, 'Red Card' AS event_type, NULL AS minute,
+              ('Rolled over from season' || CASE WHEN COALESCE(s.note, '') <> '' THEN ': ' || s.note ELSE '' END) AS reason,
+              NULL AS supplemental_report,
+              COALESCE(s.issued_from_game_date, s.created_at) AS game_date, NULL AS gender,
+              'reviewed' AS status, s.note AS committee_notes, s.created_by AS reviewed_by, s.created_at AS reviewed_at,
+              s.games_suspended, COALESCE(s.standard_games, s.games_suspended) AS standard_games,
+              LEAST(
+                (SELECT COUNT(*) FROM match_report_scores mrs2
+                 WHERE (mrs2.team1_id = s.team_id OR mrs2.team2_id = s.team_id)
+                 AND mrs2.game_date > s.issued_from_game_date AND mrs2.game_date < now()),
+                s.games_suspended
+              ) AS games_served,
+              NULL AS incident_report
+            FROM suspensions s
+            WHERE s.source = 'tournament_rollover' ${rc.length ? 'AND ' + rc.join(' AND ') : ''}`, rp);
+          rolloverRows = rr.rows;
+        } catch (e) { console.error('[api/misconduct] rollover rows failed:', e.message); }
+      }
+
       const [result, incidentResult] = await Promise.all([
         eventTypes.length > 0 ? pool.query(query, params) : Promise.resolve({ rows: [] }),
         includeIncidentReports ? pool.query(incidentQuery, incidentParams) : Promise.resolve({ rows: [] }),
       ]);
-      const combinedRows = [...result.rows, ...incidentResult.rows].sort((a, b) => {
+      const combinedRows = [...result.rows, ...incidentResult.rows, ...rolloverRows].sort((a, b) => {
         const dateA = a.game_date ? new Date(a.game_date).getTime() : -Infinity;
         const dateB = b.game_date ? new Date(b.game_date).getTime() : -Infinity;
         return dateB - dateA;
