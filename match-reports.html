@@ -61,11 +61,21 @@
     .kbox .kit svg { width: 30px; height: auto; display: block; }
     .kbox .kit span { font-size: 10px; font-weight: 700; letter-spacing: .1em; color: var(--gray); text-transform: uppercase; }
     .kbox .dash { height: 38px; display: flex; align-items: center; justify-content: center; color: var(--gray); font-weight: 800; font-size: 18px; }
-    .mr-card-pub { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "t1 t2" "k1 k2"; gap: 8px 10px; align-items: start; justify-items: center; margin-top: 6px; }
-    .mr-card-pub > :nth-child(1) { grid-area: t1; } .mr-card-pub > :nth-child(2) { grid-area: k1; }
-    .mr-card-pub > :nth-child(3) { grid-area: k2; } .mr-card-pub > :nth-child(4) { grid-area: t2; }
+    .mr-card-pub { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); grid-template-areas: "t1 s t2" "c1 s c2" "k1 s k2"; gap: 4px 8px; align-items: start; justify-items: center; margin-top: 6px; }
+    .mr-card-pub > .g-t1 { grid-area: t1; } .mr-card-pub > .g-t2 { grid-area: t2; }
+    .mr-card-pub > .g-c1 { grid-area: c1; } .mr-card-pub > .g-c2 { grid-area: c2; }
+    .mr-card-pub > .g-k1 { grid-area: k1; } .mr-card-pub > .g-k2 { grid-area: k2; }
+    .mr-card-pub > .g-s { grid-area: s; align-self: center; text-align: center; font-size: 15px; font-weight: 700; color: var(--navy); white-space: nowrap; min-width: 58px; }
+    .mr-card-pub > .g-c1, .mr-card-pub > .g-c2 { min-height: 4px; white-space: nowrap; }
     .mr-card-pub .tblock { min-width: 0; width: 100%; font-size: 12px; }
-    .mr-card-sub { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 6px; font-size: 13px; font-weight: 600; }
+    .live-tag { display: inline-block; background: #D32F2F; color: #fff; font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; padding: 3px 9px; border-radius: 4px; }
+    .mr-card-sub { display: none; }
+    .mr-card-pub { gap: 4px 6px; }
+    .mr-card-pub .kbox { width: 98px; gap: 4px; padding: 4px; }
+    .mr-card-pub .kbox .kit { width: 42px; }
+    .mr-card-pub .kbox .kit span { font-size: 9px; letter-spacing: .04em; }
+    .mr-card-pub > .g-s { min-width: 44px; font-size: 14px; white-space: normal; }
+    .mr-card-pub > .g-s a { display: block; font-size: 10px; font-weight: 600; margin-top: 2px; }
     .mr-cards { display: none; }
     .mr-card { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; }
     .mr-card-report-link { display: block; text-align: center; font-size: 11px; font-weight: 600; color: var(--navy); text-decoration: none; }
@@ -638,6 +648,7 @@
   }
 
   function scoreCellHtml(r) {
+    if (isLiveNow(r)) return '<span class="live-tag">Live</span>';
     const text = escapeHtml(scoreText(r));
     if (r.is_forfeit) return r.forfeit_reason === 'forfeit' ? text + forfeitLabelHtml(r) : text;
     if (r.has_report) return text;
@@ -727,7 +738,26 @@
   //    checked - just this score line highlighted yellow, card stays red.
   // 4. Otherwise plain (the card is already red, nothing more to show).
   // Forfeits keep the plain reason text throughout (no score at all).
+  // Game in progress: started, within the assumed 2h block, and no score of any kind yet
+  // (match report, SE/MO score, manual override) and not a forfeit/postponed/abandoned.
+  function isLiveNow(r) {
+    if (!r.game_date || r.is_forfeit || r.has_report || r.manual_score || r.se_manual_entry) return false;
+    if (r.se_home_score != null && r.se_away_score != null) return false;
+    const t = new Date(r.game_date).getTime(), now = Date.now();
+    return now >= t && now < t + 2 * 3600 * 1000;
+  }
+  // Compact centre-column score for the mobile card: "2 - 1" with the box-score link under it.
+  function mobileCenterScoreHtml(r) {
+    if (r.has_report && !r.is_forfeit) {
+      return `${escapeHtml(String(r.team1_score))} - ${escapeHtml(String(r.team2_score))}<a href="#" onclick="openBoxScore('${escapeJs(r.game_id)}'); return false;" style="color:var(--navy); text-decoration:underline;">Box Score</a>`;
+    }
+    return mobileScoreLineHtml(r);
+  }
   function mobileScoreLineHtml(r) {
+    if (isLiveNow(r)) return '<span class="live-tag">Live</span>';
+    if (!r.has_report && !r.is_forfeit && r.manual_score && r.manual_score.home != null && r.manual_score.away != null) {
+      return escapeHtml(r.manual_score.home + ' - ' + r.manual_score.away);
+    }
     if (r.has_report && !r.is_forfeit) {
       // A real report is the truth - plain/white regardless of either flag.
       return `${escapeHtml(String(r.team1_score))} <a href="#" onclick="openBoxScore('${escapeJs(r.game_id)}'); return false;" style="color:var(--navy); text-decoration:underline;">Box Score</a> ${escapeHtml(String(r.team2_score))}`;
@@ -848,7 +878,7 @@
     if (compact) {
       return `
         <div style="display:flex; align-items:center; justify-content:center; gap:6px; flex-wrap:wrap;">
-          <span class="muted">${isUpcoming(r) ? 'Upcoming' : 'No USCCS Report'}</span>
+          <span class="muted">${isUpcoming(r) ? (new Date(r.game_date).getTime() <= Date.now() ? 'In progress' : 'Upcoming') : 'No USCCS Report'}</span>
           <span class="muted">|</span>
           <select onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.value)" style="font-size:11px; padding:2px 4px; border:1px solid var(--border); border-radius:5px;">
             <option value="" selected>Forfeit/Postponed/Abandoned?</option>
@@ -861,7 +891,7 @@
       `;
     }
     return `
-      <span class="muted" style="font-size:12px; display:block;">${isUpcoming(r) ? 'Upcoming' : 'No USCCS Report'}</span>
+      <span class="muted" style="font-size:12px; display:block;">${isUpcoming(r) ? (new Date(r.game_date).getTime() <= Date.now() ? 'In progress' : 'Upcoming') : 'No USCCS Report'}</span>
       ${previousForfeitNoteHtml(r)}
       <select onchange="toggleForfeitFlag('${escapeJs(r.game_id)}', this.value)" style="font-size:11.5px; padding:3px 5px; margin-top:4px; border:1px solid var(--border); border-radius:5px;">
         <option value="" selected>Forfeit/Postponed/Abandoned?</option>
@@ -934,11 +964,14 @@
             <a class="mr-card-report-link" href="${r.game_id ? 'https://octopus-app-ilp92.ondigitalocean.app/?game=' + encodeURIComponent(r.game_id) : '#'}" target="_blank" rel="noopener">${r.game_id ? 'Match Report URL' : '—'}</a>
             <div class="mr-card-meta" style="margin-top:0;"><a href="#" class="kits-link" onclick="openKitsModal('${escapeJs(r.game_id)}'); return false;">Kits</a></div>
             <div class="mr-card-meta">${r.game_date ? new Date(r.game_date).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short' }) + ' ET' : '—'} · ${escapeHtml(r.gender || '')} · ${escapeHtml(r.division_name || '')}${!r.has_report && !r.is_forfeit && r.se_home_score != null && r.se_away_score != null ? ' · (score from SE/MO)' : ''}</div>
-            <div class="mr-card-pub">${teamBlockHtml(r, 1)}${kitBoxHtml(r, 1)}${kitBoxHtml(r, 2)}${teamBlockHtml(r, 2)}</div>
-            <div class="mr-card-sub">
-              ${!r.is_forfeit ? `<span class="mr-card-cards">${cardCount(r.team1_yellow_count, 'yc-count')}${cardCount(r.team1_red_count, 'rc-count')}</span>` : ''}
-              <span class="mr-card-score-inline">${mobileScoreLineHtml(r)}</span>
-              ${!r.is_forfeit ? `<span class="mr-card-cards">${cardCount(r.team2_yellow_count, 'yc-count')}${cardCount(r.team2_red_count, 'rc-count')}</span>` : ''}
+            <div class="mr-card-pub">
+              <div class="g-t1">${teamBlockHtml(r, 1)}</div>
+              <div class="g-c1">${!r.is_forfeit ? cardCount(r.team1_yellow_count, 'yc-count') + cardCount(r.team1_red_count, 'rc-count') : ''}</div>
+              <div class="g-k1">${kitBoxHtml(r, 1)}</div>
+              <div class="g-s">${mobileCenterScoreHtml(r)}</div>
+              <div class="g-t2">${teamBlockHtml(r, 2)}</div>
+              <div class="g-c2">${!r.is_forfeit ? cardCount(r.team2_yellow_count, 'yc-count') + cardCount(r.team2_red_count, 'rc-count') : ''}</div>
+              <div class="g-k2">${kitBoxHtml(r, 2)}</div>
             </div>
             ${r.incident_report && !r.is_forfeit ? `<div class="mr-card-incident-row"><button class="push-score-btn" onclick="openIncidentReportModal('${escapeJs(r.game_id)}')">View Incident Report</button></div>` : ''}
             <div class="mr-card-actions">${actionsHtml(r, true)}</div>
