@@ -1810,13 +1810,16 @@ const server = http.createServer(async (req, res) => {
                AND LOWER(COALESCE(program_name, '')) LIKE ANY($3)`,
             [rangeFrom.toISOString(), rangeTo.toISOString(), tournamentProgramPatterns()])
         : await pool.query(
-            'SELECT * FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2',
-            [rangeFrom.toISOString(), rangeTo.toISOString()]);
+            // Regular mode: tournament games never appear here.
+            `SELECT * FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2
+               AND NOT (LOWER(COALESCE(program_name, '')) LIKE ANY($3))`,
+            [rangeFrom.toISOString(), rangeTo.toISOString(), tournamentProgramPatterns()]);
       let excludedGameIds = new Set();
-      if (TOURNAMENT_MODE) {
+      {
+        // Tournament mode: the non-tournament games. Regular mode: the tournament games.
         const ex = await pool.query(
           `SELECT game_id FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2
-             AND NOT (LOWER(COALESCE(program_name, '')) LIKE ANY($3))`,
+             AND ${TOURNAMENT_MODE ? 'NOT ' : ''}(LOWER(COALESCE(program_name, '')) LIKE ANY($3))`,
           [rangeFrom.toISOString(), rangeTo.toISOString(), tournamentProgramPatterns()]);
         excludedGameIds = new Set(ex.rows.map(r => r.game_id));
       }
