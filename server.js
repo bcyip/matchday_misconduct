@@ -886,6 +886,14 @@ function tournamentBounds() {
   return { from: getEasternDayBounds(TOURNAMENT_START).start, to: getEasternDayBounds(TOURNAMENT_END).end };
 }
 
+// Regular-season program names (current season). Regular mode's Team Kits page lists only
+// teams that play in these programs. Override with CURRENT_SEASON_NAMES (comma-separated).
+const CURRENT_SEASON_NAMES = (process.env.CURRENT_SEASON_NAMES || 'College Club Soccer - Men FA 2026,College Club Soccer - Women FA 2026')
+  .split(',').map(s => s.trim()).filter(Boolean);
+function currentSeasonPatterns() {
+  return CURRENT_SEASON_NAMES.map(n => '%' + n.toLowerCase().replace(/[\\%_]/g, '\\$&') + '%');
+}
+
 // LIKE patterns for the tournament season names (see TOURNAMENT_SEASON_NAMES).
 // Used as:  LOWER(COALESCE(program_name, '')) LIKE ANY($n)  with this array as $n.
 function tournamentProgramPatterns() {
@@ -2686,18 +2694,18 @@ const server = http.createServer(async (req, res) => {
       // Tournament mode lists only tournament teams (kits for them are copied
       // from the same-named season team - see importSeasonKitsForTournamentTeams).
       const tournamentTeams = TOURNAMENT_MODE ? await getTournamentTeams() : null;
-      const [cacheTeams, kitRows] = await Promise.all([
-        pool.query(`
-          SELECT DISTINCT team_id, team_name, division_id, gender FROM (
-            SELECT home_team_id AS team_id, home_team AS team_name, division_id, gender FROM schedule_games_cache
-            UNION
-            SELECT away_team_id, away_team, division_id, gender FROM schedule_games_cache
-          ) t WHERE team_id IS NOT NULL
-        `),
-        pool.query('SELECT * FROM team_kits'),
-      ]);
+      const kitRows = await pool.query('SELECT * FROM team_kits');
       const byTeam = new Map();
-      for (const t of (tournamentTeams || [...kitTeamListFromFile, ...cacheTeams.rows])) {
+      // Regular mode: only teams playing in the current season's programs (no older seasons,
+      // no tournament teams).
+      const seasonTeams = TOURNAMENT_MODE ? null : (await pool.query(`
+        SELECT DISTINCT team_id, team_name, division_id, gender FROM (
+          SELECT home_team_id AS team_id, home_team AS team_name, division_id, gender, program_name FROM schedule_games_cache
+          UNION
+          SELECT away_team_id, away_team, division_id, gender, program_name FROM schedule_games_cache
+        ) t WHERE team_id IS NOT NULL AND LOWER(COALESCE(program_name, '')) LIKE ANY($1)
+      `, [currentSeasonPatterns()])).rows;
+      for (const t of (tournamentTeams || seasonTeams)) {
         if (!t.team_id || byTeam.has(t.team_id)) continue; // file entry wins (it comes first)
         byTeam.set(t.team_id, t);
       }
