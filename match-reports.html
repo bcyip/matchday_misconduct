@@ -148,6 +148,7 @@
 <header>
   <span id="pageTitle">USCCS Admin Console — Match Reports</span>
   <span style="display:flex; align-items:center; gap:16px;">
+    <select id="seasonSel" title="Season" onchange="onSeasonChange(this.value)" style="padding:5px 8px; border-radius:6px; border:1px solid rgba(255,255,255,.4); background:#fff; color:#11213F; font-weight:700; font-size:13px;"></select>
     <a href="/">← Misconduct Review</a>
     <a href="/kits">Team Kits</a>
     <a href="/tournament" id="tournamentNavLink" style="display:none;">Tournament Setup</a>
@@ -281,7 +282,7 @@
   let lastLoadedReports = []; // the most recent server response - "Only show games with a report" filters THIS client-side, no re-fetch
 
   async function loadFilterOptions() {
-    const res = await fetch('/api/match-reports/filter-options');
+    const res = await fetch('/api/match-reports/filter-options' + (SELECTED_SEASON ? '?season=' + encodeURIComponent(SELECTED_SEASON) : ''));
     const data = await res.json();
     if (!res.ok) return;
 
@@ -390,7 +391,31 @@
   }
 
   // ---- Tournament mode (window.TOURNAMENT_CONFIG is set by the server) -----
-  const TOURNAMENT = window.TOURNAMENT_CONFIG || null;
+  // The tournament UI (day/gender/division buttons, live refresh) applies only while the selected
+  // season IS the tournament this console runs. Set by bootstrapSeason() before first load.
+  let TOURNAMENT = null;
+  let SELECTED_SEASON = '';
+  const SEASON_STORE = 'usccsSeason'; // shared by every admin page
+  function onSeasonChange(key) {
+    try { localStorage.setItem(SEASON_STORE, key); } catch (e) {}
+    location.reload();
+  }
+  async function bootstrapSeason() {
+    try {
+      const res = await fetch('/api/seasons');
+      if (res.status === 401) { window.location.href = '/oauth/login'; return; }
+      const d = await res.json();
+      let cur = '';
+      try { cur = localStorage.getItem(SEASON_STORE) || ''; } catch (e) {}
+      if (!(d.seasons || []).some(x => x.key === cur)) cur = d.default || '';
+      SELECTED_SEASON = cur;
+      document.getElementById('seasonSel').innerHTML = (d.seasons || []).map(x => `<option value="${escapeHtml(x.key)}"${x.key === cur ? ' selected' : ''}>${escapeHtml(x.label)}</option>`).join('');
+      if (window.TOURNAMENT_CONFIG) {
+        document.getElementById('tournamentNavLink').style.display = '';
+        if (cur && cur === d.tournamentKey) TOURNAMENT = window.TOURNAMENT_CONFIG;
+      }
+    } catch (e) { /* fall back to the server's default season */ }
+  }
   const tSel = { day: 'all', gender: '', tier: '' };
 
   function easternDateOf(iso) {
@@ -562,6 +587,7 @@
     if (gender) params.set('gender', gender);
     if (dateFrom) params.set('dateFrom', dateFrom);
     if (dateTo) params.set('dateTo', dateTo);
+    if (SELECTED_SEASON) params.set('season', SELECTED_SEASON);
     try {
       const res = await fetch('/api/match-reports?' + params.toString());
       const data = await res.json();
@@ -1507,9 +1533,12 @@
     return String(str == null ? '' : str).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
   }
 
-  initTournamentUi();
-  if (!TOURNAMENT) loadFilterOptions();
-  loadReports();
+  (async () => {
+    await bootstrapSeason();
+    initTournamentUi();
+    if (!TOURNAMENT) loadFilterOptions();
+    loadReports();
+  })();
 </script>
 </body>
 </html>

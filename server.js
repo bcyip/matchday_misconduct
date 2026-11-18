@@ -894,6 +894,71 @@ function currentSeasonPatterns() {
   return CURRENT_SEASON_NAMES.map(n => '%' + n.toLowerCase().replace(/[\\%_]/g, '\\$&') + '%');
 }
 
+// ---- Season grouping for the Team Kits page ----
+// Men's and women's programs of the SAME season are one group (e.g. "College Club Soccer - Men FA
+// 2026" + "... Women FA 2026" = "Fall 2026"; "2026 National Tournament Men/Women" = one
+// tournament). The year stays in the key, so next fall or a new tournament is a separate group.
+function seasonGroupOf(programName) {
+  const raw = String(programName || '').trim();
+  const stripped = raw.replace(/\b(women|men)(?:'s|s)?\b/gi, ' ').replace(/\s+/g, ' ').replace(/\s*-\s*(?=-|$)/g, '').trim();
+  const key = stripped.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const year = (raw.match(/\b(20\d{2})\b/) || [])[1] || '';
+  let label = stripped.replace(/^\s*[-–]\s*|\s*[-–]\s*$/g, '');
+  const fa = raw.match(/\b(FA|FALL)\b/i), sp = raw.match(/\b(SP|SPRING)\b/i);
+  const tourney = TOURNAMENT_SEASON_NAMES.some(n => raw.toLowerCase().includes(n.toLowerCase()));
+  if (!tourney && year && fa) label = 'Fall ' + year;
+  else if (!tourney && year && sp) label = 'Spring ' + year;
+  return { key, label: label || raw, year, tournament: tourney };
+}
+
+// Short season code for a program name: FA26, SP27, NAT26 ...
+function seasonCodeOf(programName) {
+  const raw = String(programName || '');
+  if (!raw) return '';
+  const yy = ((raw.match(/\b(20\d{2})\b/) || [])[1] || '').slice(2);
+  let pre;
+  if (/national/i.test(raw)) pre = 'NAT';
+  else if (/\b(FA|FALL)\b/i.test(raw)) pre = 'FA';
+  else if (/\b(SP|SPRING)\b/i.test(raw)) pre = 'SP';
+  else if (/\b(WI|WINTER)\b/i.test(raw)) pre = 'WI';
+  else if (/\b(SU|SUMMER)\b/i.test(raw)) pre = 'SU';
+  else pre = raw.replace(/\b(women|men)(?:'s|s)?\b/gi, ' ').replace(/[^A-Za-z ]/g, ' ').split(/\s+/).filter(Boolean).map(w => w[0]).join('').toUpperCase().slice(0, 4);
+  return pre + yy;
+}
+
+// All seasons found in the schedule cache (cached 60s). Each has `programs` = the exact program names.
+let seasonGroupsCache = { at: 0, groups: null };
+async function getSeasonGroups() {
+  if (seasonGroupsCache.groups && Date.now() - seasonGroupsCache.at < 60000) return seasonGroupsCache.groups;
+  const progRows = await pool.query("SELECT DISTINCT program_name FROM schedule_games_cache WHERE program_name IS NOT NULL AND program_name <> ''");
+  const map = new Map();
+  for (const r of progRows.rows) {
+    const g = seasonGroupOf(r.program_name);
+    if (!map.has(g.key)) map.set(g.key, { ...g, code: seasonCodeOf(r.program_name), programs: [] });
+    map.get(g.key).programs.push(r.program_name);
+  }
+  const groups = [...map.values()].sort((x, y) => (y.year || '').localeCompare(x.year || '') || x.label.localeCompare(y.label));
+  seasonGroupsCache = { at: Date.now(), groups };
+  return groups;
+}
+// The season the admin console shows: the requested one, else this deployment's default
+// (tournament mode -> the current tournament, regular mode -> the current season).
+async function resolveSeason(key) {
+  const groups = await getSeasonGroups();
+  const lc = (v) => String(v || '').toLowerCase();
+  const has = (g, names) => g.programs.some(p => names.some(n => lc(p).includes(lc(n))));
+  let sel = key ? groups.find(g => g.key === key) : null;
+  if (!sel) {
+    sel = TOURNAMENT_MODE ? groups.find(g => has(g, TOURNAMENT_SEASON_NAMES)) : groups.find(g => has(g, CURRENT_SEASON_NAMES));
+    sel = sel || groups.find(g => !g.tournament) || groups[0] || null;
+  }
+  return {
+    groups, sel,
+    // The tournament this deployment is running (tier/exclusion rules and date bounds apply).
+    currentTournament: !!(TOURNAMENT_MODE && sel && has(sel, TOURNAMENT_SEASON_NAMES)),
+  };
+}
+
 // LIKE patterns for the tournament season names (see TOURNAMENT_SEASON_NAMES).
 // Used as:  LOWER(COALESCE(program_name, '')) LIKE ANY($n)  with this array as $n.
 function tournamentProgramPatterns() {
@@ -1613,12 +1678,6 @@ const server = http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ error: 'Not logged in' }));
     }
     try {
-      if (TOURNAMENT_MODE) {
-        // Tournament mode lists only tournament teams.
-        const tTeams = (await getTournamentTeams()).sort((a, b) => (a.team_name || '').localeCompare(b.team_name || ''));
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ teams: tTeams.map(t => ({ team_id: t.team_id, team_name: t.team_name + (t.gender ? ` (${t.gender})` : '') })) }));
-      }
       const result = await pool.query(`
         SELECT DISTINCT team_id, team_name FROM match_report_entries
         WHERE event_type IN ('Yellow Card', 'Red Card')
@@ -1646,15 +1705,19 @@ const server = http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ error: 'Not logged in' }));
     }
     try {
+      // Limited to the selected season's games.
+      const fSel = (await resolveSeason(url.searchParams.get('season'))).sel;
+      const fProgs = fSel ? fSel.programs.map(p => p.toLowerCase()) : [];
+      const inSeason = `game_id IN (SELECT game_id FROM schedule_games_cache WHERE LOWER(COALESCE(program_name, '')) = ANY($1))`;
       const [divisionsResult, teamsResult] = await Promise.all([
-        pool.query(`SELECT DISTINCT division_id FROM match_report_scores WHERE division_id IS NOT NULL ORDER BY division_id`),
+        pool.query(`SELECT DISTINCT division_id FROM match_report_scores WHERE division_id IS NOT NULL AND ${inSeason} ORDER BY division_id`, [fProgs]),
         pool.query(`
           SELECT DISTINCT team_id, team_name FROM (
-            SELECT team1_id AS team_id, team1_name AS team_name FROM match_report_scores
+            SELECT team1_id AS team_id, team1_name AS team_name FROM match_report_scores WHERE ${inSeason}
             UNION
-            SELECT team2_id AS team_id, team2_name AS team_name FROM match_report_scores
+            SELECT team2_id AS team_id, team2_name AS team_name FROM match_report_scores WHERE ${inSeason}
           ) t ORDER BY team_name
-        `),
+        `, [fProgs]),
       ]);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       // Same Ozark exclusion as the main /api/match-reports endpoint - it
@@ -1709,8 +1772,13 @@ const server = http.createServer(async (req, res) => {
       const defaultFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
       let rangeFrom;
       let rangeTo;
-      if (TOURNAMENT_MODE) {
-        // Tournament mode: only the tournament dates, past AND future (every
+      // The season selected in the admin console (default: this deployment's own season).
+      const seasonCtx = await resolveSeason(url.searchParams.get('season'));
+      const seasonSel = seasonCtx.sel;
+      const tourneyView = seasonCtx.currentTournament;
+      const seasonPrograms = seasonSel ? seasonSel.programs.map(p => p.toLowerCase()) : [];
+      if (tourneyView) {
+        // Current tournament: only the tournament dates, past AND future (every
         // scheduled game shows), whatever range was requested.
         const tb = tournamentBounds();
         const reqFrom = dateFromParam ? getEasternDayBounds(dateFromParam).start : tb.from;
@@ -1719,6 +1787,13 @@ const server = http.createServer(async (req, res) => {
         rangeTo = reqTo > tb.to ? tb.to : reqTo;
       } else {
         rangeFrom = dateFromParam ? getEasternDayBounds(dateFromParam).start : defaultFrom;
+        // A season other than this deployment's default (e.g. last fall, or a past tournament):
+        // the last-30-days window would be empty, so start at that season's first game.
+        const defKey = (await resolveSeason(null)).sel;
+        if (!dateFromParam && seasonSel && (!defKey || defKey.key !== seasonSel.key)) {
+          const mn = await pool.query('SELECT MIN(start_time) AS t FROM schedule_games_cache WHERE LOWER(COALESCE(program_name, \'\')) = ANY($1)', [seasonPrograms]);
+          if (mn.rows[0] && mn.rows[0].t) rangeFrom = new Date(mn.rows[0].t);
+        }
         // Never look past the end of today (Eastern) - this view is
         // specifically PAST games, but "today" counts even before its last
         // game has kicked off. This only affects what's shown from the
@@ -1812,25 +1887,18 @@ const server = http.createServer(async (req, res) => {
       // games whose season is a tournament season are used. excludedGameIds =
       // the in-window games that are NOT tournament games, so a stray report
       // for one of them can't sneak back in via the "report not in cache" merge below.
-      const cacheResult = TOURNAMENT_MODE
-        ? await pool.query(
-            `SELECT * FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2
-               AND LOWER(COALESCE(program_name, '')) LIKE ANY($3)`,
-            [rangeFrom.toISOString(), rangeTo.toISOString(), tournamentProgramPatterns()])
-        : await pool.query(
-            // Regular mode: tournament games never appear here.
-            `SELECT * FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2
-               AND NOT (LOWER(COALESCE(program_name, '')) LIKE ANY($3))`,
-            [rangeFrom.toISOString(), rangeTo.toISOString(), tournamentProgramPatterns()]);
-      let excludedGameIds = new Set();
-      {
-        // Tournament mode: the non-tournament games. Regular mode: the tournament games.
-        const ex = await pool.query(
-          `SELECT game_id FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2
-             AND ${TOURNAMENT_MODE ? 'NOT ' : ''}(LOWER(COALESCE(program_name, '')) LIKE ANY($3))`,
-          [rangeFrom.toISOString(), rangeTo.toISOString(), tournamentProgramPatterns()]);
-        excludedGameIds = new Set(ex.rows.map(r => r.game_id));
-      }
+      // Only games whose program belongs to the selected season. excludedGameIds = the in-range
+      // games of OTHER seasons, so a stray report for one of them can't sneak back in via the
+      // "report not in cache" merge below.
+      const cacheResult = await pool.query(
+        `SELECT * FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2
+           AND LOWER(COALESCE(program_name, '')) = ANY($3)`,
+        [rangeFrom.toISOString(), rangeTo.toISOString(), seasonPrograms]);
+      const exOther = await pool.query(
+        `SELECT game_id FROM schedule_games_cache WHERE start_time >= $1 AND start_time <= $2
+           AND NOT (LOWER(COALESCE(program_name, '')) = ANY($3))`,
+        [rangeFrom.toISOString(), rangeTo.toISOString(), seasonPrograms]);
+      const excludedGameIds = new Set(exOther.rows.map(r => r.game_id));
       // SportsEngine's own score, kept SEPARATE from our own report score
       // deliberately - never merged into team1_score/team2_score, so the
       // two sources are never confused with each other on display.
@@ -1895,7 +1963,7 @@ const server = http.createServer(async (req, res) => {
       // these dates that aren't part of the tournament) and apply the tier
       // filter. Divisions with no tier yet are "Unassigned" and still show.
       let tierMap = null;
-      if (TOURNAMENT_MODE) {
+      if (tourneyView) {
         tierMap = await loadTournamentTierMap();
         mergedRows = mergedRows.filter(r => tierMap.get(r.division_id) !== 'Excluded');
         if (tierParam) mergedRows = mergedRows.filter(r => (tierMap.get(r.division_id) || 'Unassigned') === tierParam);
@@ -1916,7 +1984,7 @@ const server = http.createServer(async (req, res) => {
         const dateB = b.game_date ? new Date(b.game_date).getTime() : -Infinity;
         if (dateA === dateB) return 0;
         // Season view: newest first. Tournament view: kickoff order within the day.
-        return TOURNAMENT_MODE ? (dateA < dateB ? -1 : 1) : (dateA < dateB ? 1 : -1);
+        return (tourneyView || (seasonSel && seasonSel.tournament)) ? (dateA < dateB ? -1 : 1) : (dateA < dateB ? 1 : -1);
       });
 
       let reports = mergedRows.map(r => {
@@ -2388,12 +2456,6 @@ const server = http.createServer(async (req, res) => {
       const playerName = url.searchParams.get('playerName') || null;
       let dateFrom = url.searchParams.get('dateFrom') || null;
       let dateTo = url.searchParams.get('dateTo') || null;
-      if (TOURNAMENT_MODE) {
-        // Tournament mode: only misconduct from tournament games.
-        const tb = tournamentBounds();
-        dateFrom = tb.from.toISOString();
-        dateTo = tb.to.toISOString();
-      }
       // 'all' (default), 'pending', or 'reviewed' - filters on the same
       // pending/reviewed status the frontend already displays as a badge.
       // No review row yet counts as 'pending', same as the response
@@ -2410,10 +2472,6 @@ const server = http.createServer(async (req, res) => {
 
       // Tournament mode: only cards/reports from tournament-season games (league
       // games are still being played on these dates).
-      if (TOURNAMENT_MODE) {
-        conditions.push(`e.game_id IN (SELECT game_id FROM schedule_games_cache WHERE LOWER(COALESCE(program_name, '')) LIKE ANY($${paramIdx++}))`);
-        params.push(tournamentProgramPatterns());
-      }
       if (teamId) { conditions.push(`e.team_id = $${paramIdx++}`); params.push(teamId); }
       if (playerName) { conditions.push(`e.name ILIKE $${paramIdx++}`); params.push('%' + playerName + '%'); }
       if (dateFrom) { conditions.push(`s.game_date >= $${paramIdx++}`); params.push(dateFrom); }
@@ -2454,10 +2512,6 @@ const server = http.createServer(async (req, res) => {
       const incidentConditions = ['s.incident_report IS NOT NULL'];
       const incidentParams = [];
       let incidentParamIdx = 1;
-      if (TOURNAMENT_MODE) {
-        incidentConditions.push(`s.game_id IN (SELECT game_id FROM schedule_games_cache WHERE LOWER(COALESCE(program_name, '')) LIKE ANY($${incidentParamIdx++}))`);
-        incidentParams.push(tournamentProgramPatterns());
-      }
       if (dateFrom) { incidentConditions.push(`s.game_date >= $${incidentParamIdx++}`); incidentParams.push(dateFrom); }
       if (dateTo) { incidentConditions.push(`s.game_date <= $${incidentParamIdx++}`); incidentParams.push(dateTo); }
       if (reviewStatus === 'pending') { incidentConditions.push(`(ir.status IS NULL OR ir.status = 'pending')`); }
@@ -2486,7 +2540,7 @@ const server = http.createServer(async (req, res) => {
       // them. Surface them as synthetic Red Card rows so they sit in the same list.
       // They are already decided, so they show as 'reviewed' and are read-only here.
       let rolloverRows = [];
-      if (TOURNAMENT_MODE && includeRed && reviewStatus !== 'pending') {
+      if (includeRed && reviewStatus !== 'pending') {
         const rc = []; const rp = []; let ri = 1;
         if (teamId) { rc.push(`s.team_id = $${ri++}`); rp.push(teamId); }
         if (playerName) { rc.push(`s.player_name ILIKE $${ri++}`); rp.push('%' + playerName + '%'); }
@@ -2525,9 +2579,19 @@ const server = http.createServer(async (req, res) => {
       // response rather than leaving status null for the frontend to
       // special-case. Now applies uniformly to cards AND incident reports,
       // since both have a real pending/reviewed workflow.
+      // Season of each row (FA26, NAT26, SP27 ...) from the program of its game. Rolled-over
+      // suspensions belong to the tournament they were rolled into.
+      const gameIds = [...new Set(combinedRows.map(r => r.game_id).filter(Boolean))];
+      const programByGame = new Map();
+      if (gameIds.length) {
+        const pr = await pool.query('SELECT game_id, program_name FROM schedule_games_cache WHERE game_id = ANY($1)', [gameIds]);
+        for (const p of pr.rows) programByGame.set(p.game_id, p.program_name);
+      }
+      const rolloverSeason = seasonCodeOf(TOURNAMENT_SEASON_NAMES[0]);
       const rows = combinedRows.map(row => ({
         ...row,
         status: row.status || 'pending',
+        season: String(row.entry_id || '').startsWith('rollover-') ? rolloverSeason : (seasonCodeOf(programByGame.get(row.game_id)) || null),
       }));
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -2681,6 +2745,26 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ---- Team kits -----------------------------------------------------------
+  // GET /api/seasons - the seasons the admin console can switch between, plus the default.
+  if (req.method === 'GET' && url.pathname === '/api/seasons') {
+    const session = await getSession(cookies.admin_session);
+    if (!session) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Not logged in' }));
+    }
+    try {
+      const { groups, sel } = await resolveSeason(null);
+      // In tournament mode, the season that is the tournament this deployment runs.
+      const tn = TOURNAMENT_MODE ? groups.find(g => g.programs.some(p => TOURNAMENT_SEASON_NAMES.some(n => p.toLowerCase().includes(n.toLowerCase())))) : null;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ seasons: groups.map(g => ({ key: g.key, label: g.label, code: g.code, tournament: g.tournament })), default: sel ? sel.key : null, tournamentKey: tn ? tn.key : null }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
   // GET /api/kits - every team (full league list + anything in the schedule
   // cache) with its four kits, for the Kits page.
   if (req.method === 'GET' && url.pathname === '/api/kits') {
@@ -2691,22 +2775,23 @@ const server = http.createServer(async (req, res) => {
     }
     try {
       if (kitTeamListFromFile === null) loadKitTeamListFile();
-      // Tournament mode lists only tournament teams (kits for them are copied
-      // from the same-named season team - see importSeasonKitsForTournamentTeams).
-      const tournamentTeams = TOURNAMENT_MODE ? await getTournamentTeams() : null;
+      const { groups: seasons, sel, currentTournament: isCurrentTournament } = await resolveSeason(url.searchParams.get('season'));
+      const lc = (v) => String(v || '').toLowerCase();
       const kitRows = await pool.query('SELECT * FROM team_kits');
+      let teamList = [];
+      if (isCurrentTournament) teamList = await getTournamentTeams();
+      else if (sel) {
+        teamList = (await pool.query(`
+          SELECT DISTINCT team_id, team_name, division_id, gender FROM (
+            SELECT home_team_id AS team_id, home_team AS team_name, division_id, gender, program_name FROM schedule_games_cache
+            UNION
+            SELECT away_team_id, away_team, division_id, gender, program_name FROM schedule_games_cache
+          ) t WHERE team_id IS NOT NULL AND LOWER(COALESCE(program_name, '')) = ANY($1)
+        `, [sel.programs.map(lc)])).rows;
+      }
       const byTeam = new Map();
-      // Regular mode: only teams playing in the current season's programs (no older seasons,
-      // no tournament teams).
-      const seasonTeams = TOURNAMENT_MODE ? null : (await pool.query(`
-        SELECT DISTINCT team_id, team_name, division_id, gender FROM (
-          SELECT home_team_id AS team_id, home_team AS team_name, division_id, gender, program_name FROM schedule_games_cache
-          UNION
-          SELECT away_team_id, away_team, division_id, gender, program_name FROM schedule_games_cache
-        ) t WHERE team_id IS NOT NULL AND LOWER(COALESCE(program_name, '')) LIKE ANY($1)
-      `, [currentSeasonPatterns()])).rows;
-      for (const t of (tournamentTeams || seasonTeams)) {
-        if (!t.team_id || byTeam.has(t.team_id)) continue; // file entry wins (it comes first)
+      for (const t of teamList) {
+        if (!t.team_id || byTeam.has(t.team_id)) continue;
         byTeam.set(t.team_id, t);
       }
       const kits = groupKitRows(kitRows.rows);
@@ -2726,7 +2811,7 @@ const server = http.createServer(async (req, res) => {
         })
         .sort((a, b) => (a.team_name || '').localeCompare(b.team_name || ''));
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ teams, uploadConfigured: !!(SUPABASE_URL && SUPABASE_SERVICE_KEY) }));
+      res.end(JSON.stringify({ teams, seasons: seasons.map(g => ({ key: g.key, label: g.label, code: g.code, tournament: g.tournament })), season: sel ? sel.key : null, uploadConfigured: !!(SUPABASE_URL && SUPABASE_SERVICE_KEY) }));
     } catch (err) {
       console.error('[api/kits] Error:', err.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });

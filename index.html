@@ -120,6 +120,7 @@
       <thead>
         <tr>
           <th>Game Date</th>
+          <th>Season</th>
           <th>Gender</th>
           <th>Team</th>
           <th>Player</th>
@@ -210,7 +211,7 @@
     document.getElementById('resultsMeta').textContent = misconductData.length + ' incident(s) found';
 
     if (!misconductData.length) {
-      tbody.innerHTML = '<tr><td colspan="9" class="muted">No misconduct matches these filters.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="10" class="muted">No misconduct matches these filters.</td></tr>';
       return;
     }
 
@@ -221,6 +222,7 @@
       const rowHtml = `
         <tr class="incident-row" onclick="toggleDetail('${row.entry_id}')">
           <td>${dateStr}</td>
+          <td><strong>${escapeHtml(row.season || '—')}</strong></td>
           <td>${escapeHtml(row.gender || '—')}</td>
           <td>${escapeHtml(row.team_name)}</td>
           <td>${isReport ? escapeHtml(row.name || '—') : escapeHtml(row.name) + (row.person_type === 'staff' ? ' <span class="muted">(staff)</span>' : '')}</td>
@@ -236,7 +238,7 @@
         </tr>
       `;
       const detailHtml = String(expandedEntryId) === String(row.entry_id)
-        ? `<tr><td colspan="9">${isReport ? renderIncidentReportPanel(row) : (isRollover ? renderRolloverPanel(row) : renderDetailPanel(row))}</td></tr>`
+        ? `<tr><td colspan="10">${isReport ? renderIncidentReportPanel(row) : (isRollover ? renderRolloverPanel(row) : renderDetailPanel(row))}</td></tr>`
         : '';
       return rowHtml + detailHtml;
     }).join('');

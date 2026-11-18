@@ -75,6 +75,7 @@
 <main>
   <div class="card">
     <div class="filters">
+      <div class="field"><label for="seasonSel">Season</label><select id="seasonSel" onchange="onSeasonChange(this.value)"></select></div>
       <div class="field"><label for="searchBox">Team</label><input type="text" id="searchBox" placeholder="Search teams..." oninput="renderTeams()" /></div>
       <div class="field"><label for="confFilter">Conference</label><select id="confFilter" onchange="renderTeams()"><option value="">All</option></select></div>
       <div class="field"><label for="genderFilter">Gender</label>
@@ -208,13 +209,20 @@
     }).join('') : '<p class="muted">No teams match these filters.</p>';
   }
 
-  async function loadKits() {
+  const SEASON_STORE = 'usccsSeason'; // shared by every admin page
+  function onSeasonChange(key) {
+    try { localStorage.setItem(SEASON_STORE, key); } catch (e) {}
+    loadKits(key);
+  }
+  async function loadKits(season) {
+    if (season === undefined) { try { season = localStorage.getItem(SEASON_STORE) || ''; } catch (e) { season = ''; } }
     try {
-      const resp = await fetch('/api/kits');
+      const resp = await fetch('/api/kits' + (season ? '?season=' + encodeURIComponent(season) : ''));
       if (resp.status === 401) { window.location.href = '/oauth/login'; return; }
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || 'Failed to load kits');
       teams = data.teams;
+      document.getElementById('seasonSel').innerHTML = (data.seasons || []).map(s => `<option value="${escapeHtml(s.key)}"${s.key === data.season ? ' selected' : ''}>${escapeHtml(s.label)}</option>`).join('');
       uploadConfigured = !!data.uploadConfigured;
       const confs = [...new Set(teams.map(t => t.conference).filter(Boolean))].sort();
       document.getElementById('confFilter').innerHTML = '<option value="">All</option>' + confs.map(c => `<option>${escapeHtml(c)}</option>`).join('');
