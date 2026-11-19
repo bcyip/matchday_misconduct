@@ -710,6 +710,31 @@ async function runAutomaticScheduleSync() {
   }
 }
 
+// One-time historical backfill. Set SCHEDULE_BACKFILL_FROM=YYYY-MM-DD (e.g. 2026-08-28) and
+// restart: on startup it pulls every game from that date through today in 14-day chunks and
+// upserts them into schedule_games_cache (filling program_name on older rows too). Safe to
+// re-run; remove the variable afterwards so it doesn't repeat on every restart.
+async function runScheduleBackfill(fromDateStr) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDateStr)) { console.error('[schedule-backfill] SCHEDULE_BACKFILL_FROM must be YYYY-MM-DD, got:', fromDateStr); return; }
+  const startedAt = Date.now();
+  let cursor = getEasternDayBounds(fromDateStr).start;
+  const end = new Date();
+  let total = 0;
+  console.log('[schedule-backfill] Starting from', fromDateStr);
+  while (cursor < end) {
+    const chunkEnd = new Date(Math.min(cursor.getTime() + 14 * 24 * 60 * 60 * 1000, end.getTime()));
+    try {
+      const r = await runScheduleSyncForRange(cursor, chunkEnd);
+      total += r.syncedCount;
+      console.log(`[schedule-backfill] ${r.rangeFrom} .. ${r.rangeTo}: ${r.syncedCount} games`);
+    } catch (err) {
+      console.error('[schedule-backfill] Chunk failed (continuing):', cursor.toISOString(), err.message);
+    }
+    cursor = chunkEnd;
+  }
+  console.log(`[schedule-backfill] Done: ${total} games upserted in ${Math.round((Date.now() - startedAt) / 1000)}s. You can remove SCHEDULE_BACKFILL_FROM now.`);
+}
+
 // Tournament mode's replacement for the rolling sync above: pulls every game
 // in the tournament window, past or future, then makes sure new tournament
 // teams have kits copied over from their season teams.
@@ -906,8 +931,9 @@ function seasonGroupOf(programName) {
   let label = stripped.replace(/^\s*[-–]\s*|\s*[-–]\s*$/g, '');
   const fa = raw.match(/\b(FA|FALL)\b/i), sp = raw.match(/\b(SP|SPRING)\b/i);
   const tourney = TOURNAMENT_SEASON_NAMES.some(n => raw.toLowerCase().includes(n.toLowerCase()));
-  if (!tourney && year && fa) label = 'Fall ' + year;
-  else if (!tourney && year && sp) label = 'Spring ' + year;
+  if (!tourney && year && fa) label = year + ' Fall';
+  else if (!tourney && year && sp) label = year + ' Spring';
+  else if (year && !label.startsWith(year)) label = year + ' ' + label.replace(year, '').replace(/\s+/g, ' ').trim(); // year first
   return { key, label: label || raw, year, tournament: tourney };
 }
 
@@ -3088,9 +3114,11 @@ server.listen(PORT, async () => {
     // season window), more often since scores and schedules change quickly.
     console.log(`[tournament] TOURNAMENT_MODE on: ${TOURNAMENT_NAME}, ${TOURNAMENT_START} to ${TOURNAMENT_END} (Eastern).`);
     await ensureTournamentTables();
+    if (process.env.SCHEDULE_BACKFILL_FROM) runScheduleBackfill(process.env.SCHEDULE_BACKFILL_FROM.trim());
     runTournamentSync();
     setInterval(runTournamentSync, TOURNAMENT_SYNC_INTERVAL_MINUTES * 60 * 1000);
   } else {
+    if (process.env.SCHEDULE_BACKFILL_FROM) runScheduleBackfill(process.env.SCHEDULE_BACKFILL_FROM.trim());
     runAutomaticScheduleSync();
     setInterval(runAutomaticScheduleSync, RIBBON_SYNC_INTERVAL_MINUTES * 60 * 1000);
   }
